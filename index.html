@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Yuddha Arena — Quest 3 / 3S WebXR</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #0b0d15; color: #eef2fa;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #overlay {
+      position: fixed; inset: 0; z-index: 20;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: radial-gradient(circle at 50% 30%, rgba(28,36,56,0.92), rgba(9,11,18,0.97));
+      padding: 24px; text-align: center;
+    }
+    #overlay.hidden { display: none; }
+    .card {
+      max-width: 560px; width: 100%;
+      background: rgba(18, 22, 34, 0.92);
+      border: 1px solid rgba(255, 110, 74, 0.35);
+      border-radius: 16px; padding: 28px 24px;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+    }
+    h1 { font-size: 2rem; letter-spacing: 0.08em; color: #ff6b4a; margin-bottom: 6px; }
+    .subtitle { font-size: 0.92rem; color: #9fb0cc; margin-bottom: 18px; }
+    .modes {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px;
+    }
+    .mode-btn {
+      background: #1a2133; color: #dbe6fa; border: 1px solid #2e3b59;
+      border-radius: 10px; padding: 12px 10px; cursor: pointer; font-weight: 600;
+      font-size: 0.9rem; transition: 0.15s;
+    }
+    .mode-btn.active {
+      background: #2b1a1c; border-color: #ff6b4a; color: #fff;
+      box-shadow: 0 0 0 1px #ff6b4a inset;
+    }
+    .room-row {
+      display: flex; gap: 8px; margin-bottom: 16px; align-items: center;
+    }
+    .room-row input {
+      flex: 1; background: #101522; border: 1px solid #2e3b59; color: #eef2fa;
+      border-radius: 8px; padding: 10px 12px; font-size: 0.9rem;
+    }
+    .cta-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      background: linear-gradient(135deg, #ff5838, #e63928); color: #fff;
+      border: none; border-radius: 12px; padding: 14px 26px; font-size: 1.05rem;
+      font-weight: 700; cursor: pointer; letter-spacing: 0.04em;
+    }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-secondary {
+      background: #1c2438; color: #c7d5ef; border: 1px solid #344366;
+      border-radius: 12px; padding: 14px 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    }
+    .rules {
+      margin-top: 16px; text-align: left; font-size: 0.82rem; color: #96a8c6; line-height: 1.5;
+      background: rgba(10,13,22,0.7); padding: 12px 14px; border-radius: 10px;
+    }
+    .rules strong { color: #e2ecff; }
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 10; pointer-events: none;
+      background: rgba(10, 13, 22, 0.78); border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px; padding: 10px 14px; font-size: 13px; line-height: 1.45;
+      min-width: 280px;
+    }
+    #hud.hidden { display: none; }
+    .callout { color: #ffd166; font-weight: 700; margin-top: 4px; }
+    #strata-bar {
+      position: fixed; bottom: 12px; right: 12px; z-index: 15; display: flex; gap: 8px;
+    }
+    #strata-bar button {
+      background: rgba(20, 26, 42, 0.9); color: #d6e2f8; border: 1px solid #3b4b72;
+      border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="card">
+      <h1>YUDDHA ARENA</h1>
+      <div class="subtitle">Quest 3 / 3S WebXR · Room-Scale Combat · Zero-Install Edition</div>
+
+      <div class="modes" id="mode-grid">
+        <button class="mode-btn active" data-mode="0">1. Heavy Bag</button>
+        <button class="mode-btn" data-mode="1">2. Focus Mitts</button>
+        <button class="mode-btn" data-mode="2">3. Slip Bag</button>
+        <button class="mode-btn" data-mode="3">4. 1v1 Duel</button>
+      </div>
+
+      <div class="room-row">
+        <input id="room-input" type="text" placeholder="Optional 1v1 Relay URL (wss://.../api/relay/...) or blank for Sparring Bot" />
+      </div>
+
+      <div class="cta-row">
+        <button id="enter-vr-btn" class="btn-primary">ENTER MIXED REALITY (QUEST 3 / 3S)</button>
+        <button id="enter-fullvr-btn" class="btn-secondary" style="display:none">Full VR (hide my room)</button>
+        <button id="desktop-btn" class="btn-secondary">Desktop Preview</button>
+        <a href="/brain" class="btn-secondary" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;">Shared Brain War Room</a>
+      </div>
+
+      <div id="xr-status" style="margin-top:10px;font-size:0.84rem;color:#8bb4ff;">Checking WebXR headset support...</div>
+      <div id="brain-receipt-status" style="margin-top:6px;font-size:0.8rem;color:#94a3b8;"></div>
+
+      <div class="rules">
+        <strong>Room-Scale Only (Zero Nausea):</strong> Walk physically inside the 3.7m × 3.7m ring (thumbsticks disabled in combat).<br />
+        <strong>Mixed Reality:</strong> Your real room stays visible (Quest passthrough) — only the opponent, your hands and hit effects are drawn. Clear a 2m × 2m space.<br />
+        <strong>Real Strike Physics:</strong> Power comes from fist speed (nothing under <strong>2.2 m/s</strong>, full power at <strong>8 m/s</strong>). Land square for a SOLID hit — angled contact glances off. Jaw, temples, solar plexus and liver are weak points. Big head shots stun; built-up punishment drops your opponent.<br />
+        <strong>Full-Surface Parry:</strong> Forearms, elbows, shoulders, open palms and fists all block &amp; strike. Block angle <strong>&gt; 60° = 90% damage reduction</strong> + Touch Plus haptics.<br />
+        <strong>Bare Hands:</strong> Squeeze <strong>Grip</strong> to close your fingers, <strong>Trigger</strong> curls your index finger, rest your thumb on the stick/buttons to fold it — release for an open palm. Controller-free hand tracking mirrors your real fingers.<br />
+        <strong>In-VR Mode Switch:</strong> Press <strong>B / Y</strong> to cycle Heavy Bag → Focus Mitts → Slip Bag → 1v1 Duel.
+      </div>
+    </div>
+  </div>
+
+  <div id="hud" class="hidden">
+    <div id="hud-mode" style="font-weight:700;color:#ff7e5f;">YUDDHA ARENA</div>
+    <div id="hud-stats">SCORE 0.0 | HITS 0 | PARRIES 0</div>
+    <div id="hud-callout" class="callout">STEP IN — STRIKE FAST AND SQUARE</div>
+  </div>
+
+  <div id="strata-bar">
+    <button id="send-brain-btn" title="Post strata-runtime/1 telemetry receipt straight to Yuddha Shared Brain">Send to Yuddha Brain</button>
+    <button id="auto-brain-btn" title="Toggle auto-sending receipt when exiting VR">Auto-Send: ON</button>
+    <button id="export-strata-btn" title="Download strata-runtime/1 JSON for EBS Strata">Export Strata Receipt</button>
+    <button id="menu-back-btn">Menu</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.170.0/build/three.module.js';
+    import { createHumanHand, curlsFromGamepad, curlsFromHandJoints, HAND_WRIST_LOCAL } from './hands.js';
+    import { STRIKE, computeStrike, powerFromSpeed, strikeQuality, headZone, bodyZone, createPunishment, stepPunishment, applyHit, condition, createImpactAudio } from './combat.js';
+
+    // ── Constants matching C# YuddhaCombatPhysics 1:1 ─────────────────────
+    const RING_HALF = 1.85;
+    // Strike gates tuned for realism (see combat.js): velocity-gated, capped at the
+    // ~10 m/s where Quest controller tracking stops being trustworthy.
+    const REQUIRED_TRAVEL = STRIKE.MIN_TRAVEL; // 0.30 m — allows short kung-fu chain punches
+    const HIT_COOLDOWN = 0.20;
+    const MIN_SPEED = STRIKE.MIN_SPEED;        // 2.2 m/s
+    const MAX_SPEED = STRIKE.MAX_SPEED;        // 10 m/s
+    const CLEAN_BLOCK_MULT = STRIKE.BLOCK_MULT; // 90% reduction
+    const FOREARM_R = 0.048;
+    const UPPER_ARM_R = 0.056;
+    const SHOULDER_R = 0.088;
+    const HEAD_R = 0.115;
+    const TORSO_R = 0.145;
+
+    const MODES = ['HEAVY BAG', 'FOCUS MITTS', 'SLIP BAG', '1V1 DUEL'];
+    let activeMode = 0;
+    let menuOpen = false;
+    let tickCount = 0;
+    let elapsedSec = 0;
+
+    // ── Three.js Stereo WebXR Scene ───────────────────────────────────────
+    // alpha: true so Quest passthrough (immersive-ar) shows the real room behind the scene.
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local-floor');
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.04, 50);
+    const rigGroup = new THREE.Group();
+    rigGroup.add(camera);
+    scene.add(rigGroup);
+
+    // ── Lighting: one warm overhead key with dark falloff (gritty), dim fill, cool rim ──
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    const hemi = new THREE.HemisphereLight(0xffe2c0, 0x1a120c, 0.75);
+    scene.add(hemi);
+    const keyLight = new THREE.SpotLight(0xffd6a0, 2.8, 0, 0.8, 0.6, 0);
+    keyLight.position.set(0.3, 4.2, 0.2);
+    keyLight.target.position.set(0, 1.0, -0.4);
+    scene.add(keyLight, keyLight.target);
+    const rimLight = new THREE.DirectionalLight(0x9fb8ff, 0.55);
+    rimLight.position.set(-2.2, 3.0, -2.5);
+    scene.add(rimLight);
+
+    // Procedural canvas textures (no external assets).
+    function canvasTex(w, h, draw, repeatX = 1, repeatY = 1) {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      draw(c.getContext('2d'), w, h);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeatX, repeatY);
+      t.anisotropy = 4;
+      return t;
+    }
+    const woodTex = canvasTex(512, 512, (g, w, h) => {
+      const planks = 8;
+      for (let i = 0; i < planks; i++) {
+        const base = 70 + Math.random() * 25;
+        g.fillStyle = `rgb(${base + 38},${base * 0.62 + 12},${base * 0.36})`;
+        g.fillRect(0, (i * h) / planks, w, h / planks);
+        for (let k = 0; k < 60; k++) { // grain
+          g.strokeStyle = `rgba(30,16,8,${0.05 + Math.random() * 0.12})`;
+          g.beginPath(); const y = (i + Math.random()) * h / planks;
+          g.moveTo(0, y); g.bezierCurveTo(w * 0.3, y + 3, w * 0.6, y - 3, w, y + Math.random() * 4); g.stroke();
+        }
+        g.fillStyle = 'rgba(10,5,2,0.8)'; g.fillRect(0, (i * h) / planks, w, 2); // seams
+        g.fillRect(((i * 197) % w), (i * h) / planks, 2, h / planks);
+      }
+      g.fillStyle = 'rgba(0,0,0,0.18)'; // scuffs
+      for (let k = 0; k < 80; k++) { g.beginPath(); g.arc(Math.random() * w, Math.random() * h, Math.random() * 18, 0, 6.3); g.fill(); }
+    }, 3, 3);
+
+    // ── Training hall (full-VR fallback only; hidden in mixed reality) ────
+    const envGroup = new THREE.Group();
+    scene.add(envGroup);
+    const matFloor = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.82, color: 0xb8a490 });
+    const matPlatform = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.7, color: 0x8a4a32 });
+    const matLacquer = new THREE.MeshStandardMaterial({ color: 0x7a1712, roughness: 0.45 });
+    const matDarkWood = new THREE.MeshStandardMaterial({ color: 0x2a1a12, roughness: 0.85 });
+    const matWhite = new THREE.MeshStandardMaterial({ color: 0xe2e6ee, roughness: 0.5 });
+
+    const hallFloor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), matFloor);
+    hallFloor.rotation.x = -Math.PI / 2; hallFloor.position.y = -0.002;
+    envGroup.add(hallFloor);
+    // Low sparring platform the size of the play space.
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(RING_HALF * 2 + 0.3, 0.04, RING_HALF * 2 + 0.3), matPlatform);
+    platform.position.y = -0.02;
+    envGroup.add(platform);
+    // Lacquered pillars at the corners mark the boundary (no ropes for open-hand fighting).
+    for (const [px, pz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 3.4, 12), matLacquer);
+      pillar.position.set(px * (RING_HALF + 0.35), 1.7, pz * (RING_HALF + 0.35));
+      envGroup.add(pillar);
+      const baseStone = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.21, 0.16, 10), matDarkWood);
+      baseStone.position.set(pillar.position.x, 0.08, pillar.position.z);
+      envGroup.add(baseStone);
+    }
+    // Back and side walls: dark timber, with a wooden training dummy and hanging lanterns.
+    const wallMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x4a3426, roughness: 0.9 });
+    for (const [x, z, ry] of [[0, -4.2, 0], [-4.2, 0, Math.PI / 2], [4.2, 0, -Math.PI / 2], [0, 4.2, Math.PI]]) {
+      const wall = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 4.2), wallMat);
+      wall.position.set(x, 2.1, z); wall.rotation.y = ry;
+      envGroup.add(wall);
+    }
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.22, 0.22), matDarkWood);
+    beam.position.set(0, 3.6, -4.05); envGroup.add(beam);
+    const dummy = new THREE.Group();
+    const dBody = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 1.5, 12), matDarkWood);
+    dBody.position.y = 1.05; dummy.add(dBody);
+    for (const [y, ry, len] of [[1.35, 0.35, 0.42], [1.35, -0.35, 0.42], [1.05, 0, 0.38]]) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, len, 8), matDarkWood);
+      arm.rotation.x = Math.PI / 2; arm.rotation.y = ry; arm.position.set(Math.sin(ry) * len * 0.5, y, Math.cos(ry) * len * 0.5);
+      dummy.add(arm);
+    }
+    dummy.position.set(-3.0, 0, -3.3); dummy.rotation.y = 0.5;
+    envGroup.add(dummy);
+    const lanternMat = new THREE.MeshBasicMaterial({ color: 0xff6a3a });
+    for (const lx of [-2.6, -0.9, 0.9, 2.6]) {
+      const lantern = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 8), lanternMat);
+      lantern.scale.y = 1.25; lantern.position.set(lx, 3.0, -3.8);
+      envGroup.add(lantern);
+    }
+    scene.background = new THREE.Color(0x0d0907);
+    scene.fog = new THREE.FogExp2(0x0d0907, 0.04);
+
+    // ── Mixed-reality boundary: a faint floor outline only (your real room is the hall) ──
+    const arGroup = new THREE.Group();
+    arGroup.visible = false;
+    scene.add(arGroup);
+    {
+      const pts = [[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]].map(([x, z]) => new THREE.Vector3(x * RING_HALF, 0.005, z * RING_HALF));
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb36b, transparent: true, opacity: 0.45 }));
+      arGroup.add(line);
+      const disc = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.45, 40), new THREE.MeshBasicMaterial({ color: 0xffb36b, transparent: true, opacity: 0.25, side: THREE.DoubleSide }));
+      disc.rotation.x = -Math.PI / 2; disc.position.y = 0.004;
+      arGroup.add(disc);
+    }
+    const _savedBg = scene.background, _savedFog = scene.fog;
+    function setPassthrough(on) {
+      envGroup.visible = !on;
+      arGroup.visible = on;
+      scene.background = on ? null : _savedBg;
+      scene.fog = on ? null : _savedFog;
+      renderer.setClearColor(0x000000, on ? 0 : 1);
+      hemi.intensity = on ? 0.95 : 0.75; // real-room ambient is brighter than the dark hall
+    }
+
+    // Diegetic 3D Ringside Jumbotron (readable inside VR!)
+    const boardCanvas = document.createElement('canvas');
+    boardCanvas.width = 1024; boardCanvas.height = 384;
+    const boardCtx = boardCanvas.getContext('2d');
+    const boardTex = new THREE.CanvasTexture(boardCanvas);
+    const boardMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.3, 0.4875),
+      new THREE.MeshBasicMaterial({ map: boardTex, transparent: true, opacity: 0.82, depthWrite: false })
+    );
+    boardMesh.position.set(0, 2.25, -2.3); // small, high and out of the sightline (minimal HUD)
+    scene.add(boardMesh);
+
+    function updateJumbotron(title, stats, callout, hp0, hp1, isDuel) {
+      const ctx = boardCtx;
+      ctx.clearRect(0, 0, 1024, 384);
+      ctx.fillStyle = 'rgba(12,9,7,0.72)';
+      ctx.fillRect(0, 0, 1024, 384);
+      ctx.fillStyle = '#c0392b';
+      ctx.fillRect(0, 0, 1024, 6);
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 46px sans-serif';
+      ctx.fillText(title, 512, 74);
+
+      if (isDuel) {
+        ctx.fillStyle = '#242d42';
+        ctx.fillRect(48, 105, 420, 34);
+        ctx.fillRect(556, 105, 420, 34);
+        ctx.fillStyle = '#eb3b30';
+        ctx.fillRect(48, 105, Math.max(4, 420 * (hp0 / 100)), 34);
+        ctx.fillStyle = '#2f7df6';
+        ctx.fillRect(556, 105, Math.max(4, 420 * (hp1 / 100)), 34);
+      }
+
+      ctx.fillStyle = '#b9ccf0';
+      ctx.font = '600 34px sans-serif';
+      ctx.fillText(stats, 512, isDuel ? 210 : 185);
+
+      ctx.fillStyle = '#ffd166';
+      ctx.font = 'bold 32px sans-serif';
+      ctx.fillText(callout.slice(0, 62), 512, 305);
+      boardTex.needsUpdate = true;
+
+      document.getElementById('hud-mode').textContent = title;
+      document.getElementById('hud-stats').textContent = stats;
+      document.getElementById('hud-callout').textContent = callout;
+    }
+
+    // ── Fighter Visual Mesh Rig (Bare Human Hands, Forearm, UpperArm, Shoulder) ──
+    // Hands are articulated (five fingers, knuckle joints) and open/close from
+    // controller grip/trigger or hand-tracking joints — see hands.js.
+    function createFighterVisual(isLocal, accentColorHex, trunkColorHex) {
+      const group = new THREE.Group();
+      const accentMat = new THREE.MeshStandardMaterial({ color: accentColorHex, roughness: 0.45 });
+      const skinMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xd4a17e : 0xb98468, roughness: 0.72 });
+      const nailMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xeec2b0 : 0xdcae9a, roughness: 0.35 });
+      const trunkMat = new THREE.MeshStandardMaterial({ color: trunkColorHex, roughness: 0.75 });
+
+      const makeLimb = (r) => new THREE.Mesh(new THREE.CapsuleGeometry(r, 1.0, 6, 14), skinMat);
+      const lHandRig = createHumanHand({ side: 'left', skinMat, nailMat });
+      const rHandRig = createHumanHand({ side: 'right', skinMat, nailMat });
+
+      const parts = {
+        group,
+        lHandRig, rHandRig,
+        lHand: lHandRig.group,
+        rHand: rHandRig.group,
+        lForearm: makeLimb(FOREARM_R),
+        rForearm: makeLimb(FOREARM_R),
+        // Training-jacket sleeves over the upper arms; bare forearms and hands.
+        lUpper: new THREE.Mesh(new THREE.CapsuleGeometry(UPPER_ARM_R * 1.08, 1.0, 6, 14), trunkMat),
+        rUpper: new THREE.Mesh(new THREE.CapsuleGeometry(UPPER_ARM_R * 1.08, 1.0, 6, 14), trunkMat),
+        lShoulder: new THREE.Mesh(new THREE.SphereGeometry(SHOULDER_R, 14, 12), trunkMat),
+        rShoulder: new THREE.Mesh(new THREE.SphereGeometry(SHOULDER_R, 14, 12), trunkMat),
+        head: new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 18, 14), skinMat),
+        torso: new THREE.Mesh(new THREE.CapsuleGeometry(TORSO_R, 0.36, 8, 16), trunkMat),
+      };
+      // Cloth headband, short dark hair, simple eyes; a sash belt on the jacket.
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(HEAD_R * 1.02, HEAD_R * 1.02, 0.032, 18, 1, true), accentMat);
+      band.position.y = 0.045;
+      const hairMat = new THREE.MeshStandardMaterial({ color: 0x15100c, roughness: 0.95 });
+      const hair = new THREE.Mesh(new THREE.SphereGeometry(HEAD_R * 1.05, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.42), hairMat);
+      hair.position.set(0, 0.012, 0.006);
+      const eyeMat = new THREE.MeshStandardMaterial({ color: 0x120c0a, roughness: 0.3 });
+      for (const ex of [-0.036, 0.036]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), eyeMat);
+        eye.position.set(ex, 0.005, -HEAD_R * 0.93);
+        parts.head.add(eye);
+      }
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), skinMat);
+      nose.scale.set(0.8, 1.2, 1); nose.position.set(0, -0.025, -HEAD_R * 0.98);
+      parts.head.add(band, hair, nose);
+      const sash = new THREE.Mesh(new THREE.CylinderGeometry(TORSO_R * 1.04, TORSO_R * 1.04, 0.07, 18), accentMat);
+      sash.position.y = -0.17;
+      parts.torso.add(sash);
+
+      if (isLocal) {
+        // First-person: hide own head & torso so your face never clips into stereo eye views!
+        parts.head.visible = false;
+        parts.torso.visible = false;
+      }
+
+      group.add(
+        parts.lHand, parts.rHand, parts.lForearm, parts.rForearm,
+        parts.lUpper, parts.rUpper, parts.lShoulder, parts.rShoulder,
+        parts.head, parts.torso
+      );
+      scene.add(group);
+      return parts;
+    }
+
+    const f0Vis = createFighterVisual(true, 0xa8231b, 0x2b2420);
+    const f1Vis = createFighterVisual(false, 0x9e1b1b, 0x34343c);
+
+    // ── Trainer Apparatus Meshes ──────────────────────────────────────────
+    // Heavy Bag
+    const bagGroup = new THREE.Group();
+    const bagChain = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 1, 10), new THREE.MeshStandardMaterial({ color: 0x99a3b0, metalness: 0.7, roughness: 0.3 }));
+    const bagBody = new THREE.Mesh(new THREE.CapsuleGeometry(0.19, 0.92, 10, 20), new THREE.MeshStandardMaterial({ color: 0x8f291e, roughness: 0.6 }));
+    const bagBand = new THREE.Mesh(new THREE.CylinderGeometry(0.195, 0.195, 0.14, 20), new THREE.MeshStandardMaterial({ color: 0xebc63d, roughness: 0.45 }));
+    bagGroup.add(bagChain, bagBody, bagBand);
+    scene.add(bagGroup);
+
+    // Focus Mitts
+    const mittsGroup = new THREE.Group();
+    function makeMitt(colorHex) {
+      const g = new THREE.Group();
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.055, 0.28), new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.45 }));
+      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.14, 10), new THREE.MeshStandardMaterial({ color: 0xffe85c, emissive: 0x665500 }));
+      stem.position.y = 0.08;
+      g.add(pad, stem);
+      return g;
+    }
+    const leftMittVis = makeMitt(0xeb3d33);
+    const rightMittVis = makeMitt(0x339ef5);
+    mittsGroup.add(leftMittVis, rightMittVis);
+    scene.add(mittsGroup);
+
+    // Slip Bag
+    const slipGroup = new THREE.Group();
+    const slipRope = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 1, 8), matWhite);
+    const slipMat = new THREE.MeshStandardMaterial({ color: 0xe09e38, roughness: 0.45, emissive: 0x000000 });
+    const slipBulb = new THREE.Mesh(new THREE.SphereGeometry(0.105, 18, 14), slipMat);
+    slipGroup.add(slipRope, slipBulb);
+    scene.add(slipGroup);
+
+    // Impact Flash Sphere
+    const flashMat = new THREE.MeshBasicMaterial({ color: 0xffb829, transparent: true, opacity: 0 });
+    const flashMesh = new THREE.Mesh(new THREE.SphereGeometry(0.08, 14, 12), flashMat);
+    scene.add(flashMesh);
+    let flashAge = 99;
+
+    // ── Analytical 2-Bone Arm Solver + Stroke Tracker (Matches C# 1:1) ────
+    const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3();
+    const _upY = new THREE.Vector3(0, 1, 0);
+
+    function createStrokeState() {
+      return { prevRel: new THREE.Vector3(), prevWorld: new THREE.Vector3(), vel: new THREE.Vector3(), travel: 0, cooldown: 0, peak: 0, init: false };
+    }
+    function stepStroke(st, worldPos, shoulderPos, dt) {
+      st.cooldown = Math.max(0, st.cooldown - dt);
+      const rel = worldPos.clone().sub(shoulderPos);
+      if (!st.init) {
+        st.prevRel.copy(rel); st.prevWorld.copy(worldPos); st.vel.set(0, 0, 0); st.init = true; return;
+      }
+      const rawVel = worldPos.clone().sub(st.prevWorld).divideScalar(Math.max(dt, 1e-4));
+      if (rawVel.length() > MAX_SPEED) rawVel.setLength(MAX_SPEED);
+      st.vel.lerp(rawVel, Math.min(1, Math.max(0.2, dt * 35)));
+      const speed = st.vel.length();
+      const stepDist = Math.max(rel.distanceTo(st.prevRel), worldPos.distanceTo(st.prevWorld));
+
+      if (speed >= MIN_SPEED) {
+        if (st.peak > 2.0 && rawVel.lengthSq() > 1e-4 && rawVel.clone().normalize().dot(st.vel.clone().normalize()) < -0.25) {
+          st.travel = stepDist; st.peak = speed;
+        } else {
+          st.travel = Math.min(2.5, st.travel + stepDist);
+          st.peak = Math.max(st.peak, speed);
+        }
+      } else {
+        st.travel = Math.max(0, st.travel - dt * 1.8);
+        if (st.travel <= 0.05) st.peak = 0;
+      }
+      st.prevRel.copy(rel); st.prevWorld.copy(worldPos);
+    }
+
+    function solveArmRig(headPos, headQuat, lHandPos, lHandQuat, rHandPos, rHandQuat) {
+      // Clamp STAGE head to ring bounds (Zero stick locomotion!)
+      const offX = THREE.MathUtils.clamp(headPos.x, -RING_HALF, RING_HALF) - headPos.x;
+      const offZ = THREE.MathUtils.clamp(headPos.z, -RING_HALF, RING_HALF) - headPos.z;
+      const off = new THREE.Vector3(offX, 0, offZ);
+
+      const hP = headPos.clone().add(off);
+      const lHP = lHandPos.clone().add(off);
+      const rHP = rHandPos.clone().add(off);
+
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+      fwd.y = 0;
+      if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); else fwd.normalize();
+      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+      const chest = hP.clone().add(new THREE.Vector3(0, -0.22, 0)).addScaledVector(fwd, -0.04);
+
+      const lSh = chest.clone().addScaledVector(right, -0.19);
+      const rSh = chest.clone().addScaledVector(right, 0.19);
+
+      function solveElbow(sh, hand, handQ, sideSign) {
+        const L1 = 0.29, L2 = 0.27;
+        const toH = hand.clone().sub(sh);
+        const dist = toH.length();
+        if (dist < 0.05) return sh.clone().add(new THREE.Vector3(sideSign * 0.08, -L1, 0));
+        const dir = toH.clone().divideScalar(dist);
+        const cDist = THREE.MathUtils.clamp(dist, 0.06, L1 + L2 - 0.005);
+        const cosA = THREE.MathUtils.clamp((L1 * L1 + cDist * cDist - L2 * L2) / (2 * L1 * cDist), -1, 1);
+        const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
+        const wristOut = new THREE.Vector3(sideSign, -0.65, 0).applyQuaternion(handQ);
+        const pole = new THREE.Vector3(0, -0.8, 0).addScaledVector(right, sideSign * 0.42).addScaledVector(wristOut, 0.35).normalize();
+        const bend = pole.sub(dir.clone().multiplyScalar(pole.dot(dir)));
+        if (bend.lengthSq() < 1e-5) bend.crossVectors(dir, right);
+        bend.normalize();
+        return sh.clone().addScaledVector(dir, L1 * cosA).addScaledVector(bend, L1 * sinA);
+      }
+
+      return {
+        head: hP, headQuat: headQuat.clone(),
+        lSh, rSh,
+        lEl: solveElbow(lSh, lHP, lHandQuat, -1),
+        rEl: solveElbow(rSh, rHP, rHandQuat, +1),
+        lH: lHP, lHQ: lHandQuat.clone(),
+        rH: rHP, rHQ: rHandQuat.clone(),
+        chest, pelvis: chest.clone().add(new THREE.Vector3(0, -0.36, 0)),
+        ringOffset: off,
+      };
+    }
+
+    function placeLimbMesh(mesh, a, b, radius) {
+      const dir = _vA.subVectors(b, a);
+      const len = dir.length();
+      if (len < 1e-4) return;
+      mesh.position.addVectors(a, b).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(_upY, dir.divideScalar(len));
+      mesh.scale.set(1, Math.max(0.05, len / (1.0 + radius * 2)), 1);
+    }
+
+    // Hand meshes live in WebXR grip-space. Desktop preview & the sparring bot feed a
+    // plain facing quaternion instead, so rotate it into grip-space: forearm back toward
+    // the body, thumbs up, palms facing in (a vertical-fist guard).
+    const GRIP_FROM_FACING = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    const _wristL = new THREE.Vector3(-HAND_WRIST_LOCAL.x, HAND_WRIST_LOCAL.y, HAND_WRIST_LOCAL.z);
+    const _wristR = HAND_WRIST_LOCAL.clone();
+    const _lWrist = new THREE.Vector3(), _rWrist = new THREE.Vector3();
+
+    function syncFighterVisual(vis, rig, dt, facingQuats = false) {
+      vis.lHand.position.copy(rig.lH); vis.lHand.quaternion.copy(rig.lHQ);
+      vis.rHand.position.copy(rig.rH); vis.rHand.quaternion.copy(rig.rHQ);
+      if (facingQuats) {
+        vis.lHand.quaternion.multiply(GRIP_FROM_FACING);
+        vis.rHand.quaternion.multiply(GRIP_FROM_FACING);
+      }
+      vis.lHandRig.update(dt);
+      vis.rHandRig.update(dt);
+      // Forearm meets the hand at the wrist (visual only — colliders still use rig.lH / rig.rH).
+      _lWrist.copy(_wristL).applyQuaternion(vis.lHand.quaternion).add(rig.lH);
+      _rWrist.copy(_wristR).applyQuaternion(vis.rHand.quaternion).add(rig.rH);
+      placeLimbMesh(vis.lForearm, rig.lEl, _lWrist, FOREARM_R);
+      placeLimbMesh(vis.rForearm, rig.rEl, _rWrist, FOREARM_R);
+      placeLimbMesh(vis.lUpper, rig.lSh, rig.lEl, UPPER_ARM_R);
+      placeLimbMesh(vis.rUpper, rig.rSh, rig.rEl, UPPER_ARM_R);
+      vis.lShoulder.position.copy(rig.lSh);
+      vis.rShoulder.position.copy(rig.rSh);
+      vis.head.position.copy(rig.head); vis.head.quaternion.copy(rig.headQuat);
+      vis.torso.position.addVectors(rig.chest, rig.pelvis).multiplyScalar(0.5);
+    }
+
+    // Segment-to-segment closest distance for Capsule-Capsule / Sphere collision
+    function segmentCapsuleOverlap(a0, a1, rA, b0, b1, rB) {
+      let bestDistSq = Infinity;
+      let bestA = a0, bestB = b0;
+      for (let i = 0; i <= 4; i++) {
+        const pa = _vA.lerpVectors(a0, a1, i / 4).clone();
+        const ab = _vB.subVectors(b1, b0);
+        const l2 = ab.lengthSq();
+        const t = l2 > 1e-6 ? THREE.MathUtils.clamp(_vC.subVectors(pa, b0).dot(ab) / l2, 0, 1) : 0;
+        const pb = b0.clone().addScaledVector(ab, t);
+        const d2 = pa.distanceToSquared(pb);
+        if (d2 < bestDistSq) { bestDistSq = d2; bestA = pa; bestB = pb; }
+      }
+      const sumR = rA + rB;
+      if (bestDistSq > sumR * sumR) return null;
+      const d = Math.sqrt(bestDistSq);
+      const n = d > 1e-5 ? bestB.clone().sub(bestA).divideScalar(d) : new THREE.Vector3(0, 1, 0);
+      return { point: bestA.clone().addScaledVector(n, rA), normal: n };
+    }
+
+    // ── Simulation State & Telemetry ──────────────────────────────────────
+    const state = {
+      hp0: 100, hp1: 100, score: 0, hits: 0, blocks: 0, wiggles: 0, slips: 0,
+      callout: 'STEP IN — STRIKE FAST AND SQUARE',
+      p0: createPunishment(), p1: createPunishment(), kds: 0,
+      bot: { off: new THREE.Vector3(), vel: new THREE.Vector3(), pauseT: 0, back: 0, clock: 0 },
+      h0Prev: null, h1Prev: null, h0Vel: new THREE.Vector3(), h1Vel: new THREE.Vector3(),
+      bagAngleX: 0, bagAngleZ: 0, bagVelX: 0, bagVelZ: 0,
+      mittIdx: 0, slipPhase: 0, slipCd: 0, slipArmed: false, slipMinD: 99,
+      f0L: createStrokeState(), f0R: createStrokeState(),
+      f1L: createStrokeState(), f1R: createStrokeState(),
+    };
+
+    window.__yuddha = { state }; // read-only debug/test hook
+
+    const mittPatterns = [
+      { lPos: new THREE.Vector3(-0.18, 1.54, -0.52), lN: new THREE.Vector3(0.08, -0.05, 1).normalize(), rPos: new THREE.Vector3(0.18, 1.56, -0.58), rN: new THREE.Vector3(-0.08, -0.05, 1).normalize() },
+      { lPos: new THREE.Vector3(-0.10, 1.52, -0.46), lN: new THREE.Vector3(-0.88, -0.05, 0.46).normalize(), rPos: new THREE.Vector3(0.20, 1.60, -0.56), rN: new THREE.Vector3(-0.12, -0.08, 0.98).normalize() },
+      { lPos: new THREE.Vector3(-0.16, 1.28, -0.48), lN: new THREE.Vector3(0.12, 0.22, 0.96).normalize(), rPos: new THREE.Vector3(0.10, 1.54, -0.46), rN: new THREE.Vector3(0.88, -0.05, 0.46).normalize() },
+      { lPos: new THREE.Vector3(-0.15, 1.38, -0.44), lN: new THREE.Vector3(0.05, -0.82, 0.56).normalize(), rPos: new THREE.Vector3(0.15, 1.40, -0.46), rN: new THREE.Vector3(-0.05, -0.82, 0.56).normalize() },
+    ];
+
+    function pulseController(handedness, amp, ms = 45) {
+      const session = renderer.xr.getSession();
+      if (!session) return;
+      for (const src of session.inputSources) {
+        if (src.handedness === handedness && src.gamepad?.hapticActuators?.[0]) {
+          src.gamepad.hapticActuators[0].pulse(THREE.MathUtils.clamp(amp, 0, 1), ms);
+        }
+      }
+    }
+
+    function showFlash(pt, colorHex, size = 1) {
+      flashMesh.position.copy(pt);
+      flashMat.color.setHex(colorHex);
+      flashMat.opacity = 1.0;
+      flashAge = 0;
+      flashSize = size;
+    }
+    let flashSize = 1;
+
+    // ── Impact feedback: procedural audio, haptics scaled to the hit, screen tint ──
+    const sfx = createImpactAudio();
+    function strikeFeedback(side, dmg, quality, point, stunned = false) {
+      const k = Math.min(1, dmg / STRIKE.MAX_DMG);
+      if (side) {
+        if (quality === 'SOLID') pulseController(side, 0.35 + 0.65 * k, 35 + 55 * k);
+        else if (quality === 'BLOCK') pulseController(side, 0.35, 30);
+        else pulseController(side, 0.15, 15);
+      }
+      if (stunned) { sfx.play('stun', 1); showFlash(point, 0xffffff, 1.6); return; }
+      sfx.play(quality === 'SOLID' ? 'solid' : quality === 'BLOCK' ? 'block' : 'glance', 0.25 + 0.75 * k);
+      showFlash(point, quality === 'SOLID' ? 0xffb02e : quality === 'BLOCK' ? 0x7fd8ff : 0x9aa4b2, quality === 'SOLID' ? 0.7 + k : 0.5);
+    }
+
+    // Full-view tint attached to the camera (works in VR/MR): flashes when you're hit,
+    // whites out when stunned, and greys in as your punishment builds up.
+    const tintMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+    const tintMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.6), tintMat);
+    tintMesh.position.z = -0.06; tintMesh.renderOrder = 999; tintMesh.frustumCulled = false;
+    camera.add(tintMesh);
+    const tint = { hit: 0, hitColor: new THREE.Color(0xb3261e) };
+    const _tintCol = new THREE.Color();
+    function hurtFeedback(dmg, guarded, stunned) {
+      tint.hit = Math.min(0.55, (guarded ? 0.08 : 0.15) + dmg / 60);
+      tint.hitColor.setHex(guarded ? 0x2a4a7a : dmg > 15 ? 0xb3261e : 0x8a5a2a);
+      if (stunned) { tint.hit = 0.8; tint.hitColor.setHex(0xf2f2f2); }
+    }
+    function updateTint(dt) {
+      const p0 = state.p0;
+      tint.hit = Math.max(0, tint.hit - dt * (p0.stunT > 0 ? 0.35 : 1.6));
+      const wear = activeMode === 3 ? Math.min(1, (p0.stp + p0.pendingBody) / Math.max(35, 100 - 0.6 * p0.ltp)) : 0;
+      const grey = 0.4 * wear * wear;
+      if (p0.downT > 0) { _tintCol.setHex(0x050505); tintMat.opacity = 0.75; }
+      else if (tint.hit > grey) { _tintCol.copy(tint.hitColor); tintMat.opacity = tint.hit; }
+      else { _tintCol.setHex(0x3a3a3a); tintMat.opacity = grey; }
+      tintMat.color.copy(_tintCol);
+      tintMesh.visible = tintMat.opacity > 0.01;
+    }
+    function onKnockdown(isOpponent) {
+      sfx.play('down', 1);
+      if (isOpponent) { state.kds++; state.callout = `KNOCKDOWN! (${state.p1.knockdowns}) — LET THEM RISE`; pulseController('left', 0.8, 120); pulseController('right', 0.8, 120); }
+      else { state.callout = 'YOU WENT DOWN — BREATHE, GUARD UP'; }
+    }
+
+    function setMode(m) {
+      activeMode = m;
+      bagGroup.visible = (m === 0);
+      mittsGroup.visible = (m === 1);
+      slipGroup.visible = (m === 2);
+      f1Vis.group.visible = (m === 3);
+      state.hp0 = 100; state.hp1 = 100;
+      state.callout = [
+        'HEAVY BAG: SPEED + SQUARE CONTACT = POWER',
+        'FOCUS MITTS: MATCH HAND & STRIKE SQUARE INTO PAD ANGLE',
+        'SLIP BAG: WEAVE HEAD OFF CENTERLINE (ZERO STICK)',
+        '1V1 SYMMETRIC DUEL: FOREARMS, PALMS & SHOULDERS PARRY (>60° = -90% DMG)',
+      ][m];
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', Number(b.dataset.mode) === m));
+    }
+    setMode(0);
+
+    // ── Optional 20Hz Relay WebSocket for Online 1v1 ──────────────────────
+    let ws = null;
+    let remotePose = null;
+    let netStatus = 'SPARRING PARTNER';
+    let sendAccum = 0;
+    function connectRelay(url) {
+      if (ws) { try { ws.close(); } catch {} ws = null; }
+      if (!url || !url.startsWith('ws')) { netStatus = 'SPARRING PARTNER'; return; }
+      try {
+        ws = new WebSocket(url);
+        netStatus = 'CONNECTING RELAY...';
+        ws.onopen = () => { netStatus = '1V1 RELAY LIVE (20HZ)'; };
+        ws.onclose = () => { netStatus = 'RELAY CLOSED'; remotePose = null; };
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.t === 'pose') remotePose = msg;
+          } catch {}
+        };
+      } catch { netStatus = 'SPARRING PARTNER'; }
+    }
+
+    // ── Desktop Preview Controls (when not in Quest VR) ───────────────────
+    const keys = {};
+    let deskFoot = new THREE.Vector3(0, 0, 0.55);
+    let deskYaw = 0, deskLPunch = -1, deskRPunch = -1;
+    window.addEventListener('keydown', (e) => {
+      keys[e.code] = true;
+      if (e.code === 'Digit1') setMode(0);
+      if (e.code === 'Digit2') setMode(1);
+      if (e.code === 'Digit3') setMode(2);
+      if (e.code === 'Digit4') setMode(3);
+      if (e.code === 'KeyF' && deskRPunch < 0) deskRPunch = 0;
+    });
+    window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+    window.addEventListener('mousedown', (e) => {
+      if (!renderer.xr.isPresenting && document.getElementById('overlay').classList.contains('hidden')) {
+        if (e.button === 0 && deskLPunch < 0) deskLPunch = 0;
+      }
+    });
+
+    // ── Main Frame Loop (90Hz in Quest WebXR / 60Hz Desktop) ──────────────
+    let lastTs = performance.now();
+    let prevSwitchPressed = false;
+    const _curlTmp = [0, 0, 0, 0, 0];
+    const curlAll = (v) => [v, v, v, v, v];
+
+    renderer.setAnimationLoop((now, xrFrame) => {
+      const dt = THREE.MathUtils.clamp((now - lastTs) / 1000, 1 / 144, 0.05);
+      lastTs = now;
+      tickCount++;
+      elapsedSec += dt;
+
+      let hPos = new THREE.Vector3(0, 1.65, 0.55);
+      let hQuat = new THREE.Quaternion();
+      let lPos = new THREE.Vector3(-0.18, 1.44, 0.22);
+      let lQuat = new THREE.Quaternion();
+      let rPos = new THREE.Vector3(0.18, 1.44, 0.22);
+      let rQuat = new THREE.Quaternion();
+
+      if (renderer.xr.isPresenting && xrFrame) {
+        const refSpace = renderer.xr.getReferenceSpace();
+        const viewerPose = xrFrame.getViewerPose(refSpace);
+        if (viewerPose) {
+          const p = viewerPose.transform.position;
+          const q = viewerPose.transform.orientation;
+          hPos.set(p.x, p.y, p.z);
+          hQuat.set(q.x, q.y, q.z, q.w);
+        }
+        const session = renderer.xr.getSession();
+        let switchBtn = false;
+        for (const src of session.inputSources) {
+          if (!src.gripSpace) continue;
+          const pose = xrFrame.getPose(src.gripSpace, refSpace);
+          if (pose) {
+            const p = pose.transform.position, q = pose.transform.orientation;
+            if (src.handedness === 'left') { lPos.set(p.x, p.y, p.z); lQuat.set(q.x, q.y, q.z, q.w); }
+            if (src.handedness === 'right') { rPos.set(p.x, p.y, p.z); rQuat.set(q.x, q.y, q.z, q.w); }
+          }
+          // Finger curl: real joints when hand-tracking, otherwise grip/trigger/thumb-touch.
+          const handRig = src.handedness === 'left' ? f0Vis.lHandRig : src.handedness === 'right' ? f0Vis.rHandRig : null;
+          if (src.hand) {
+            if (handRig && curlsFromHandJoints(xrFrame, src.hand, refSpace, _curlTmp)) handRig.setTarget(_curlTmp);
+          } else if (src.gamepad) {
+            if (handRig) handRig.setTarget(curlsFromGamepad(src.gamepad, _curlTmp));
+            // B / Y buttons (index 5) cycle mode cleanly — thumbsticks NEVER move the player!
+            if (src.gamepad.buttons[5]?.pressed) switchBtn = true;
+          }
+        }
+        if (switchBtn && !prevSwitchPressed) setMode((activeMode + 1) % 4);
+        prevSwitchPressed = switchBtn;
+      } else {
+        // Desktop preview rig
+        const fwd = new THREE.Vector3(-Math.sin(deskYaw), 0, -Math.cos(deskYaw));
+        const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+        if (keys['KeyW']) deskFoot.addScaledVector(fwd, 1.5 * dt);
+        if (keys['KeyS']) deskFoot.addScaledVector(fwd, -1.5 * dt);
+        if (keys['KeyA']) deskFoot.addScaledVector(right, -1.5 * dt);
+        if (keys['KeyD']) deskFoot.addScaledVector(right, 1.5 * dt);
+        deskFoot.x = THREE.MathUtils.clamp(deskFoot.x, -RING_HALF, RING_HALF);
+        deskFoot.z = THREE.MathUtils.clamp(deskFoot.z, -RING_HALF, RING_HALF);
+
+        const slipX = (keys['KeyQ'] ? -0.26 : 0) + (keys['KeyE'] ? 0.26 : 0);
+        hPos.copy(deskFoot).add(new THREE.Vector3(slipX, 1.65, 0));
+        hQuat.setFromAxisAngle(_upY, deskYaw);
+        lPos.copy(hPos).add(new THREE.Vector3(-0.18, -0.20, -0.34));
+        rPos.copy(hPos).add(new THREE.Vector3(0.18, -0.20, -0.34));
+
+        if (keys['Space']) {
+          lPos.copy(hPos).add(new THREE.Vector3(-0.11, -0.05, -0.22));
+          rPos.copy(hPos).add(new THREE.Vector3(0.11, -0.05, -0.22));
+        }
+        if (deskLPunch >= 0) {
+          deskLPunch += dt;
+          if (deskLPunch > 0.28) deskLPunch = -1;
+          else lPos.addScaledVector(fwd, 0.78 * Math.sin((deskLPunch / 0.28) * Math.PI));
+        }
+        if (deskRPunch >= 0) {
+          deskRPunch += dt;
+          if (deskRPunch > 0.30) deskRPunch = -1;
+          else rPos.addScaledVector(fwd, 0.82 * Math.sin((deskRPunch / 0.30) * Math.PI));
+        }
+        camera.position.copy(hPos);
+        camera.quaternion.copy(hQuat);
+
+        // Desktop hands: relaxed by default, open palms on guard (Space), fists while
+        // punching or holding R.
+        const relaxed = keys['Space'] ? 0 : 0.35;
+        const fistHeld = keys['KeyR'];
+        f0Vis.lHandRig.setTarget(curlAll(fistHeld || deskLPunch >= 0 ? 1 : relaxed));
+        f0Vis.rHandRig.setTarget(curlAll(fistHeld || deskRPunch >= 0 ? 1 : relaxed));
+      }
+
+      const rig0 = solveArmRig(hPos, hQuat, lPos, lQuat, rPos, rQuat);
+      if (renderer.xr.isPresenting) rigGroup.position.copy(rig0.ringOffset);
+
+      stepStroke(state.f0L, rig0.lH, rig0.lSh, dt);
+      stepStroke(state.f0R, rig0.rH, rig0.rSh, dt);
+      syncFighterVisual(f0Vis, rig0, dt, !renderer.xr.isPresenting);
+
+      // 20 Hz Network Sync (if relay connected)
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        sendAccum += dt;
+        if (sendAccum >= 0.05) {
+          sendAccum = 0;
+          ws.send(JSON.stringify({
+            t: 'pose',
+            h: [rig0.head.x, rig0.head.y, rig0.head.z],
+            lh: [rig0.lH.x, rig0.lH.y, rig0.lH.z],
+            rh: [rig0.rH.x, rig0.rH.y, rig0.rH.z],
+            lf: Array.from(f0Vis.lHandRig.curl, (v) => Math.round(v * 100) / 100),
+            rf: Array.from(f0Vis.rHandRig.curl, (v) => Math.round(v * 100) / 100),
+          }));
+        }
+      }
+
+      // ── Mode-Specific Physics ───────────────────────────────────────────
+      if (activeMode === 0) {
+        // Heavy Bag pendulum
+        const gL = 9.81 / 1.31;
+        state.bagVelX += (-gL * Math.sin(state.bagAngleX) - 2.2 * state.bagVelX) * dt;
+        state.bagVelZ += (-gL * Math.sin(state.bagAngleZ) - 2.2 * state.bagVelZ) * dt;
+        state.bagAngleX = THREE.MathUtils.clamp(state.bagAngleX + state.bagVelX * dt, -0.68, 0.68);
+        state.bagAngleZ = THREE.MathUtils.clamp(state.bagAngleZ + state.bagVelZ * dt, -0.68, 0.68);
+
+        const pivot = new THREE.Vector3(0, 2.55, -0.95);
+        const dir = new THREE.Vector3(Math.sin(state.bagAngleX), -Math.cos(state.bagAngleX) * Math.cos(state.bagAngleZ), Math.sin(state.bagAngleZ)).normalize();
+        const top = pivot.clone().addScaledVector(dir, 0.85);
+        const bot = top.clone().addScaledVector(dir, 0.92);
+        const mid = top.clone().add(bot).multiplyScalar(0.5);
+
+        placeLimbMesh(bagChain, pivot, top, 0.018);
+        bagBody.position.copy(mid);
+        bagBody.quaternion.setFromUnitVectors(_upY, dir.clone().negate());
+        bagBand.position.copy(top.clone().lerp(bot, 0.35));
+        bagBand.quaternion.copy(bagBody.quaternion);
+
+        const limbs = [
+          { side: 'left', a: rig0.lH, b: rig0.lH, r: 0.075, st: state.f0L, name: 'HAND' },
+          { side: 'right', a: rig0.rH, b: rig0.rH, r: 0.075, st: state.f0R, name: 'HAND' },
+          { side: 'left', a: rig0.lEl, b: rig0.lH, r: FOREARM_R, st: state.f0L, name: 'FOREARM' },
+          { side: 'right', a: rig0.rEl, b: rig0.rH, r: FOREARM_R, st: state.f0R, name: 'FOREARM' },
+        ];
+        for (const limb of limbs) {
+          const hit = segmentCapsuleOverlap(limb.a, limb.b, limb.r, top, bot, 0.19);
+          if (!hit) continue;
+          const speed = limb.st.vel.length();
+          if (speed < MIN_SPEED || limb.st.cooldown > 0) continue;
+          if (limb.st.travel < REQUIRED_TRAVEL) {
+            limb.st.cooldown = 0.12;
+            state.wiggles++;
+            pulseController(limb.side, 0.18, 25);
+            showFlash(hit.point, 0x888888);
+            state.callout = `TOO SHORT (${limb.st.travel.toFixed(2)}m) — COMMIT TO THE STRIKE`;
+            sfx.play('whiff', 0.5);
+            continue;
+          }
+          const align = limb.st.vel.clone().normalize().dot(hit.normal);
+          const res = computeStrike({ speed, align, zone: { mult: limb.name === 'HAND' ? 1 : 0.6 } });
+          const pts = res.dmg;
+          state.score += pts; state.hits++;
+          limb.st.cooldown = HIT_COOLDOWN; limb.st.travel = 0; limb.st.peak = 0;
+          // Bag swings with the delivered momentum (solid hits move it, glancing ones barely).
+          const push = Math.min(1.8, 1.6 * res.power * (res.quality === 'SOLID' ? 1 : 0.35));
+          state.bagVelX += hit.normal.x * push;
+          state.bagVelZ += hit.normal.z * push;
+          strikeFeedback(limb.side, res.dmg, res.quality, hit.point);
+          state.callout = `${res.quality} ${limb.name} — ${Math.min(speed, MAX_SPEED).toFixed(1)} m/s → ${pts.toFixed(0)} DMG`;
+        }
+      } else if (activeMode === 1) {
+        // Focus Mitts
+        const pat = mittPatterns[state.mittIdx % mittPatterns.length];
+        leftMittVis.position.copy(pat.lPos);
+        leftMittVis.quaternion.setFromUnitVectors(_upY, pat.lN);
+        rightMittVis.position.copy(pat.rPos);
+        rightMittVis.quaternion.setFromUnitVectors(_upY, pat.rN);
+
+        const checks = [
+          { side: 'left', hand: rig0.lH, st: state.f0L, pos: pat.lPos, n: pat.lN },
+          { side: 'right', hand: rig0.rH, st: state.f0R, pos: pat.rPos, n: pat.rN },
+        ];
+        for (const c of checks) {
+          if (c.hand.distanceTo(c.pos) > 0.19 || c.st.cooldown > 0) continue;
+          const speed = c.st.vel.length();
+          if (speed < MIN_SPEED) continue;
+          const align = c.st.vel.clone().normalize().dot(c.n.clone().negate());
+          if (align < 0.55) {
+            c.st.cooldown = 0.15; pulseController(c.side, 0.2, 25);
+            state.callout = 'OFF-ANGLE MITT SLAP — PUNCH SQUARE INTO PAD!';
+            continue;
+          }
+          if (c.st.travel < REQUIRED_TRAVEL) {
+            c.st.cooldown = 0.14; state.wiggles++; pulseController(c.side, 0.18, 25);
+            state.callout = `SHORT SNAP (${c.st.travel.toFixed(2)}m) — COMMIT!`;
+            continue;
+          }
+          const pts = speed * align;
+          state.score += pts; state.hits++;
+          c.st.cooldown = HIT_COOLDOWN; c.st.travel = 0; c.st.peak = 0;
+          state.mittIdx++;
+          pulseController(c.side, Math.min(1, speed / 7), 45);
+          showFlash(c.pos, 0x38e5ff);
+          state.callout = `CRISP ${c.side.toUpperCase()} MITT! +${pts.toFixed(1)} PTS`;
+          break;
+        }
+      } else if (activeMode === 2) {
+        // Slip Bag
+        state.slipCd = Math.max(0, state.slipCd - dt);
+        const prevSin = Math.sin(state.slipPhase);
+        state.slipPhase += dt * 2.55;
+        const curSin = Math.sin(state.slipPhase);
+        const pivot = new THREE.Vector3(0, 2.45, 0.35);
+        const ax = Math.sin(state.slipPhase) * 0.46;
+        const az = Math.cos(state.slipPhase * 0.5) * 0.22 + 0.32;
+        const dir = new THREE.Vector3(Math.sin(ax), -Math.cos(ax) * Math.cos(az), Math.sin(az)).normalize();
+        const bulb = pivot.clone().addScaledVector(dir, 0.86);
+        placeLimbMesh(slipRope, pivot, bulb, 0.01);
+        slipBulb.position.copy(bulb);
+
+        const dHead = rig0.head.distanceTo(bulb);
+        if (dHead < HEAD_R + 0.105 && state.slipCd <= 0) {
+          state.slipCd = 0.55; state.slipArmed = false;
+          slipMat.emissive.setHex(0xcc1111);
+          pulseController('left', 0.6, 60); pulseController('right', 0.6, 60);
+          state.callout = 'CLIPPED BY SLIP BAG! WEAVE HEAD OFF CENTERLINE!';
+        } else {
+          slipMat.emissive.setHex(0x000000);
+          if (Math.abs(curSin) < 0.35 && Math.abs(rig0.head.z - bulb.z) < 0.45) {
+            state.slipArmed = true; state.slipMinD = Math.min(state.slipMinD, dHead);
+          }
+          if (state.slipArmed && Math.abs(curSin) > 0.65 && Math.sign(curSin) === Math.sign(prevSin)) {
+            state.slipArmed = false;
+            if (state.slipMinD < 0.65) {
+              state.slips++; state.score += 5;
+              state.callout = `CLEAN HEAD SLIP #${state.slips}! (+5 PTS)`;
+            }
+            state.slipMinD = 99;
+          }
+        }
+      } else if (activeMode === 3) {
+        // 1v1 Duel (Remote Relay Peer OR Built-in Sparring Partner)
+        const B = state.bot, p1 = state.p1;
+        // Hit-reaction spring: the opponent's upper body snaps along the strike and settles.
+        B.vel.addScaledVector(B.off, -95 * dt);
+        B.vel.multiplyScalar(Math.exp(-8.5 * dt));
+        B.off.addScaledVector(B.vel, dt);
+        B.off.clampLength(0, 0.28);
+        B.pauseT = Math.max(0, B.pauseT - dt);
+        B.back = Math.max(0, B.back - 0.3 * dt);
+        const oppDown = p1.downT > 0, oppStunned = p1.stunT > 0;
+
+        let f1Head, f1Q, f1LH, f1RH;
+        let botStriking = false;
+        if (remotePose) {
+          f1Head = new THREE.Vector3(-remotePose.h[0], remotePose.h[1], -remotePose.h[2]).add(B.off);
+          f1Q = new THREE.Quaternion().setFromAxisAngle(_upY, Math.PI);
+          f1LH = new THREE.Vector3(-remotePose.lh[0], remotePose.lh[1], -remotePose.lh[2]);
+          f1RH = new THREE.Vector3(-remotePose.rh[0], remotePose.rh[1], -remotePose.rh[2]);
+          f1Vis.lHandRig.setTarget(Array.isArray(remotePose.lf) ? remotePose.lf : curlAll(0.4));
+          f1Vis.rHandRig.setTarget(Array.isArray(remotePose.rf) ? remotePose.rf : curlAll(0.4));
+        } else {
+          const zBot = THREE.MathUtils.clamp(rig0.head.z - 1.05 - B.back, -1.65, 0.4);
+          const xBot = THREE.MathUtils.clamp(rig0.head.x * 0.4 + Math.sin(elapsedSec * 1.1) * 0.18, -1.2, 1.2);
+          f1Q = new THREE.Quaternion().setFromAxisAngle(_upY, Math.PI);
+          if (oppDown) {
+            // Knocked down: drops to one knee, hands on the floor-side, recovers when the count ends.
+            const t = Math.min(1, (3.2 - p1.downT) / 0.35), rise = p1.downT < 0.6 ? 1 - p1.downT / 0.6 : 0;
+            const y = THREE.MathUtils.lerp(1.66, 0.92, t * (1 - rise));
+            f1Head = new THREE.Vector3(xBot, y, zBot - 0.1);
+            f1LH = new THREE.Vector3(xBot + 0.22, y - 0.45, zBot + 0.12);
+            f1RH = new THREE.Vector3(xBot - 0.22, y - 0.45, zBot + 0.12);
+            f1Vis.lHandRig.setTarget(curlAll(0.1)); f1Vis.rHandRig.setTarget(curlAll(0.1));
+          } else {
+            const wob = oppStunned ? new THREE.Vector3(Math.sin(elapsedSec * 7) * 0.05, -0.04, Math.cos(elapsedSec * 5) * 0.03) : new THREE.Vector3();
+            f1Head = new THREE.Vector3(xBot, 1.66, zBot).add(B.off).add(wob);
+            const guardY = oppStunned ? 1.22 : 1.46; // stunned = guard sags
+            f1LH = new THREE.Vector3(xBot + 0.16, guardY, zBot + 0.34).addScaledVector(B.off, 0.5);
+            f1RH = new THREE.Vector3(xBot - 0.16, guardY, zBot + 0.34).addScaledVector(B.off, 0.5);
+            // Reacts like a person: pauses its attack after being hit, can't strike while stunned.
+            let lPunching = false, rPunching = false;
+            if (B.pauseT <= 0 && !oppStunned) {
+              B.clock += dt;
+              const cyc = B.clock % 2.4;
+              lPunching = cyc < 0.36; rPunching = cyc >= 1.2 && cyc < 1.60;
+              if (lPunching) f1LH.z += 0.80 * Math.sin((cyc / 0.36) * Math.PI);
+              else if (rPunching) f1RH.z += 0.84 * Math.sin(((cyc - 1.2) / 0.40) * Math.PI);
+            }
+            botStriking = lPunching || rPunching;
+            // Kung-fu guard: open hands, snapping into a fist on each strike.
+            f1Vis.lHandRig.setTarget(curlAll(lPunching ? 1 : 0.12));
+            f1Vis.rHandRig.setTarget(curlAll(rPunching ? 1 : 0.12));
+          }
+        }
+        const rig1 = solveArmRig(f1Head, f1Q, f1LH, f1Q, f1RH, f1Q);
+        stepStroke(state.f1L, rig1.lH, rig1.lSh, dt);
+        stepStroke(state.f1R, rig1.rH, rig1.rSh, dt);
+        syncFighterVisual(f1Vis, rig1, dt, true);
+
+        // Head velocities (for the move-in bonus: walking your head into a strike hurts more).
+        if (state.h0Prev) state.h0Vel.subVectors(rig0.head, state.h0Prev).divideScalar(dt);
+        if (state.h1Prev) state.h1Vel.subVectors(rig1.head, state.h1Prev).divideScalar(dt);
+        state.h0Prev = (state.h0Prev || new THREE.Vector3()).copy(rig0.head);
+        state.h1Prev = (state.h1Prev || new THREE.Vector3()).copy(rig1.head);
+
+        // Punishment recovery (throwing strikes delays your own recovery).
+        const p0Striking = state.f0L.vel.length() > MIN_SPEED || state.f0R.vel.length() > MIN_SPEED;
+        if (stepPunishment(state.p0, dt, p0Striking)) onKnockdown(false);
+        if (stepPunishment(p1, dt, botStriking || state.f1L.vel.length() > MIN_SPEED || state.f1R.vel.length() > MIN_SPEED)) onKnockdown(true);
+
+        // Defender-frame offsets for weak-point zones.
+        const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _d = new THREE.Vector3();
+        function localOffset(defRig, point, origin) {
+          _fwd.set(0, 0, -1).applyQuaternion(defRig.headQuat); _fwd.y = 0;
+          if (_fwd.lengthSq() < 1e-4) _fwd.set(0, 0, -1); else _fwd.normalize();
+          _right.set(-_fwd.z, 0, _fwd.x);
+          _d.subVectors(point, origin);
+          return { fwd: _d.dot(_fwd), up: _d.y, right: _d.dot(_right) };
+        }
+
+        // Symmetric evaluation: Attacker strikes Defender's guard surfaces FIRST, then Head/Torso
+        function resolveSide(attRig, defRig, stL, stR, isPlayer0Attacking) {
+          const defP = isPlayer0Attacking ? state.p1 : state.p0;
+          if (defP.downT > 0) return; // no hitting a downed fighter
+          const defHeadVel = isPlayer0Attacking ? state.h1Vel : state.h0Vel;
+          const strikers = [
+            { side: 'left', a: attRig.lH, b: attRig.lH, r: 0.075, st: stL, name: 'HAND' },
+            { side: 'right', a: attRig.rH, b: attRig.rH, r: 0.075, st: stR, name: 'HAND' },
+            { side: 'left', a: attRig.lEl, b: attRig.lH, r: FOREARM_R, st: stL, name: 'FOREARM' },
+            { side: 'right', a: attRig.rEl, b: attRig.rH, r: FOREARM_R, st: stR, name: 'FOREARM' },
+          ];
+          const targets = [
+            { guard: true, a: defRig.lH, b: defRig.lH, r: 0.08, name: 'PALM', side: 'left' },
+            { guard: true, a: defRig.rH, b: defRig.rH, r: 0.08, name: 'PALM', side: 'right' },
+            { guard: true, a: defRig.lEl, b: defRig.lH, r: FOREARM_R + 0.01, name: 'FOREARM', side: 'left' },
+            { guard: true, a: defRig.rEl, b: defRig.rH, r: FOREARM_R + 0.01, name: 'FOREARM', side: 'right' },
+            { guard: true, a: defRig.lSh, b: defRig.lSh, r: SHOULDER_R, name: 'SHOULDER', side: 'left' },
+            { guard: true, a: defRig.rSh, b: defRig.rSh, r: SHOULDER_R, name: 'SHOULDER', side: 'right' },
+            { guard: false, head: true, a: defRig.head, b: defRig.head, r: HEAD_R, name: 'HEAD', side: 'both' },
+            { guard: false, head: false, a: defRig.chest, b: defRig.pelvis, r: TORSO_R, name: 'BODY', side: 'both' },
+          ];
+          for (const s of strikers) {
+            const speed = s.st.vel.length();
+            if (speed < MIN_SPEED || s.st.cooldown > 0) continue;
+            for (const t of targets) {
+              const hit = segmentCapsuleOverlap(s.a, s.b, s.r, t.a, t.b, t.r);
+              if (!hit) continue;
+              if (s.st.travel < REQUIRED_TRAVEL) {
+                s.st.cooldown = 0.12;
+                if (isPlayer0Attacking) { state.wiggles++; pulseController(s.side, 0.12, 15); sfx.play('whiff', 0.4); state.callout = `TOO SHORT (${s.st.travel.toFixed(2)}m) — COMMIT TO THE STRIKE`; }
+                break;
+              }
+              const punchDir = s.st.vel.clone().normalize();
+              const align = punchDir.dot(hit.normal);
+              const blockNormal = hit.normal.clone().negate();
+              const angleDeg = Math.acos(THREE.MathUtils.clamp(blockNormal.dot(punchDir), -1, 1)) * (180 / Math.PI);
+              const cleanBlock = t.guard && angleDeg > 60;
+              let zone = null;
+              if (!t.guard) zone = t.head ? headZone(localOffset(defRig, hit.point, defRig.head)) : bodyZone(localOffset(defRig, hit.point, defRig.chest));
+              const moveIn = t.head ? defHeadVel.dot(punchDir) * -1 : 0;
+              const res = computeStrike({
+                speed: s.name === 'HAND' ? speed : speed * 0.7, align, zone, moveInSpeed: moveIn,
+                stunned: defP.stunT > 0, guard: t.guard, cleanBlock,
+              });
+              const finalDmg = res.dmg;
+
+              s.st.cooldown = HIT_COOLDOWN; s.st.travel = 0; s.st.peak = 0;
+              const outcome = applyHit(defP, finalDmg, !!(zone && zone.head));
+              if (isPlayer0Attacking) {
+                state.score += finalDmg;
+                if (!t.guard) state.hits++;
+                // Opponent reaction: recoil along the strike, pause, step back.
+                const recoil = (t.guard ? 0.25 : 1) * Math.min(1.9, 0.25 + finalDmg * 0.06);
+                state.bot.vel.addScaledVector(punchDir, (zone && zone.head) ? recoil : recoil * 0.5);
+                state.bot.pauseT = Math.max(state.bot.pauseT, t.guard ? 0.15 : 0.35 + finalDmg * 0.025);
+                state.bot.back = Math.min(0.5, state.bot.back + res.power * (t.guard ? 0.04 : 0.12));
+              } else {
+                if (cleanBlock) state.blocks++;
+                hurtFeedback(finalDmg, t.guard, outcome.stunned);
+                if (t.side === 'both') { pulseController('left', 0.4 + finalDmg / 40, 60); pulseController('right', 0.4 + finalDmg / 40, 60); }
+                else pulseController(t.side, 0.5 + finalDmg / 50, 45);
+              }
+              if (isPlayer0Attacking || t.guard) strikeFeedback(isPlayer0Attacking ? s.side : null, finalDmg, t.guard ? 'BLOCK' : res.quality, hit.point, outcome.stunned);
+              else sfx.play(outcome.stunned ? 'stun' : res.quality === 'SOLID' ? 'solid' : 'glance', finalDmg / 30);
+              if (outcome.stunned) { state.callout = isPlayer0Attacking ? `STUNNED! ${zone.zone} — +50% DMG WINDOW` : `YOU'RE STUNNED — COVER UP!`; break; }
+              state.callout = t.guard
+                ? (cleanBlock ? `CLEAN ${t.name} PARRY (−90% → ${finalDmg.toFixed(1)})` : `${t.name} BLOCK (${finalDmg.toFixed(1)})`)
+                : `${res.quality} ${s.name} → ${zone.zone} (${finalDmg.toFixed(1)} DMG)`;
+              break;
+            }
+          }
+        }
+        resolveSide(rig0, rig1, state.f0L, state.f0R, true);
+        resolveSide(rig1, rig0, state.f1L, state.f1R, false);
+        state.hp0 = condition(state.p0);
+        state.hp1 = condition(p1);
+      }
+
+      if (flashAge < 0.25) {
+        flashAge += dt;
+        flashMat.opacity = Math.max(0, 1 - flashAge / 0.25);
+        flashMesh.scale.setScalar(flashSize * (0.6 + flashAge * 4));
+      }
+      updateTint(dt);
+
+      if (tickCount % 6 === 0) {
+        const title = activeMode === 3 ? `YUDDHA ARENA — 1V1 (${netStatus})` : `YUDDHA ARENA — ${MODES[activeMode]}`;
+        const stats = activeMode === 3
+          ? `YOU ${state.hp0.toFixed(0)}  |  KD ${state.p1.knockdowns}–${state.p0.knockdowns}  |  OPP ${state.hp1.toFixed(0)}`
+          : `SCORE ${state.score.toFixed(1)}  |  HITS ${state.hits}  |  SLIPS ${state.slips}`;
+        updateJumbotron(title, stats, state.callout, state.hp0, state.hp1, activeMode === 3);
+      }
+
+      renderer.render(scene, camera);
+    });
+
+    // ── UI Wiring & WebXR Launch ──────────────────────────────────────────
+    const enterBtn = document.getElementById('enter-vr-btn');
+    const xrStatus = document.getElementById('xr-status');
+
+    // Mixed reality (Quest passthrough) is the default so you always see your real room;
+    // full immersive VR is only used if AR isn't available (or chosen explicitly).
+    const fullVrBtn = document.getElementById('enter-fullvr-btn');
+    let arSupported = false, vrSupported = false;
+    if ('xr' in navigator) {
+      Promise.all([
+        navigator.xr.isSessionSupported('immersive-ar').catch(() => false),
+        navigator.xr.isSessionSupported('immersive-vr').catch(() => false),
+      ]).then(([ar, vr]) => {
+        arSupported = ar; vrSupported = vr;
+        if (ar) {
+          enterBtn.textContent = 'ENTER MIXED REALITY (QUEST 3 / 3S)';
+          xrStatus.textContent = 'Mixed reality ready — your room stays visible. Click ENTER MIXED REALITY.';
+          xrStatus.style.color = '#52f09c';
+          if (vr) fullVrBtn.style.display = '';
+        } else if (vr) {
+          enterBtn.textContent = 'ENTER VR (PASSTHROUGH UNAVAILABLE)';
+          xrStatus.textContent = 'This headset/browser has no passthrough AR — falling back to full VR.';
+          xrStatus.style.color = '#ffd166';
+        } else {
+          xrStatus.textContent = 'No XR headset detected in this browser — use Desktop Preview or open this URL in Meta Quest Browser.';
+          enterBtn.disabled = true;
+        }
+      });
+    } else {
+      xrStatus.textContent = 'WebXR requires HTTPS (or Quest Browser). Desktop Preview works right here!';
+      enterBtn.disabled = true;
+    }
+
+    document.querySelectorAll('.mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setMode(Number(btn.dataset.mode)));
+    });
+
+    async function startXR(mode) {
+      connectRelay(document.getElementById('room-input').value.trim());
+      sfx.resume();
+      try {
+        const session = await navigator.xr.requestSession(mode, {
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+        });
+        setPassthrough(mode === 'immersive-ar');
+        document.getElementById('overlay').classList.add('hidden');
+        document.getElementById('hud').classList.add('hidden');
+        session.addEventListener('end', () => {
+          setPassthrough(false);
+          document.getElementById('overlay').classList.remove('hidden');
+          if (autoSendReceipt && tickCount > 10) {
+            void sendStrataReceiptToBrain('XR session end');
+          }
+        });
+        await renderer.xr.setSession(session);
+      } catch (err) {
+        setPassthrough(false);
+        xrStatus.textContent = 'WebXR launch error: ' + err.message;
+        xrStatus.style.color = '#ff7b7b';
+      }
+    }
+    enterBtn.addEventListener('click', () => startXR(arSupported ? 'immersive-ar' : 'immersive-vr'));
+    fullVrBtn.addEventListener('click', () => startXR('immersive-vr'));
+    // Desktop check of the mixed-reality look: ?passthroughPreview=1 hides the hall.
+    if (new URLSearchParams(location.search).get('passthroughPreview') === '1') {
+      setPassthrough(true);
+      document.body.style.background = 'linear-gradient(#6b6f73, #8f8a80 60%, #5a5148)';
+    }
+
+    document.getElementById('desktop-btn').addEventListener('click', () => {
+      sfx.resume();
+      connectRelay(document.getElementById('room-input').value.trim());
+      document.getElementById('overlay').classList.add('hidden');
+      document.getElementById('hud').classList.remove('hidden');
+    });
+
+    document.getElementById('menu-back-btn').addEventListener('click', () => {
+      document.getElementById('overlay').classList.remove('hidden');
+    });
+
+    // Shared strata-runtime/1 receipt builder for both local export & Yuddha Shared Brain ingest
+    const BRAIN_SEAT_KEY = 'yuddha_brain_seat_token';
+    const AUTO_SEND_KEY = 'yuddha_brain_auto_receipt';
+    const urlSearch = new URLSearchParams(window.location.search);
+    if (urlSearch.get('seat')) {
+      localStorage.setItem(BRAIN_SEAT_KEY, urlSearch.get('seat').trim());
+      urlSearch.delete('seat');
+      const cleanUrl = urlSearch.toString() ? `?${urlSearch}` : window.location.pathname;
+      window.history.replaceState({}, '', cleanUrl);
+    }
+
+    let autoSendReceipt = localStorage.getItem(AUTO_SEND_KEY) !== 'false';
+    const autoBrainBtn = document.getElementById('auto-brain-btn');
+    const brainReceiptStatus = document.getElementById('brain-receipt-status');
+    const updateAutoBtn = () => {
+      autoBrainBtn.textContent = `Auto-Send: ${autoSendReceipt ? 'ON' : 'OFF'}`;
+    };
+    updateAutoBtn();
+    autoBrainBtn.addEventListener('click', () => {
+      autoSendReceipt = !autoSendReceipt;
+      localStorage.setItem(AUTO_SEND_KEY, String(autoSendReceipt));
+      updateAutoBtn();
+    });
+
+    function buildStrataReceipt() {
+      return {
+        schemaVersion: 'strata-runtime/1',
+        scenario: `Yuddha Arena WebXR — ${MODES[activeMode]}`,
+        host: navigator.userAgent,
+        capturedAt: new Date().toISOString(),
+        expected: [
+          'STAGE ring bounds',
+          'Symmetric limb colliders',
+          'Stroke travel anti-wiggle (>0.30m, >2.2m/s)',
+          'Clean block parry (>60deg -> 90% reduction)',
+          'Stereo presentation frame',
+        ],
+        observations: [
+          { layer: 'STAGE ring bounds', detail: `Room-scale local-floor clamped inside ±${RING_HALF}m ropes`, offsetMs: 0 },
+          { layer: 'Symmetric limb colliders', detail: 'Active HandSphere (bare hand), ForearmCapsule, UpperArmCapsule, ShoulderSphere', offsetMs: 0 },
+          { layer: 'Stroke travel anti-wiggle (>0.30m, >2.2m/s)', detail: `Clean hits: ${state.hits}, Wiggles rejected: ${state.wiggles}, Score: ${state.score.toFixed(1)}`, offsetMs: Math.round(elapsedSec * 1000) },
+          { layer: 'Clean block parry (>60deg -> 90% reduction)', detail: `Clean parries: ${state.blocks}, Slips: ${state.slips}`, offsetMs: Math.round(elapsedSec * 1000) },
+          { layer: 'Stereo presentation frame', detail: `Completed ${tickCount} frames (${elapsedSec.toFixed(2)}s)`, offsetMs: Math.round(elapsedSec * 1000) },
+        ],
+      };
+    }
+
+    async function sendStrataReceiptToBrain(note = '') {
+      let token = (localStorage.getItem(BRAIN_SEAT_KEY) || '').trim();
+      if (!token && note !== 'XR session end') {
+        const entered = window.prompt('Enter Yuddha Seat Token (quest-3s / collaborator / kaviraja) to send receipts to Yuddha Shared Brain:');
+        if (!entered || !entered.trim()) return;
+        token = entered.trim();
+        localStorage.setItem(BRAIN_SEAT_KEY, token);
+      }
+      if (!token) return;
+
+      const sendBtn = document.getElementById('send-brain-btn');
+      sendBtn.textContent = 'Sending…';
+      try {
+        const res = await fetch('/api/brain/receipt', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ receipt: buildStrataReceipt(), note }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          throw new Error(data?.error?.message || `HTTP ${res.status}`);
+        }
+        sendBtn.textContent = `Sent (#${data.seq})`;
+        brainReceiptStatus.textContent = `Posted strata-runtime/1 receipt #${data.seq} to Yuddha Shared Brain.`;
+        brainReceiptStatus.style.color = '#34d399';
+        setTimeout(() => { sendBtn.textContent = 'Send to Yuddha Brain'; }, 3000);
+      } catch (err) {
+        sendBtn.textContent = 'Send Failed';
+        brainReceiptStatus.textContent = `Receipt upload failed: ${err.message}`;
+        brainReceiptStatus.style.color = '#f87171';
+        setTimeout(() => { sendBtn.textContent = 'Send to Yuddha Brain'; }, 3500);
+      }
+    }
+
+    document.getElementById('send-brain-btn').addEventListener('click', () => {
+      void sendStrataReceiptToBrain('manual tap');
+    });
+
+    // Export EBS Strata strata-runtime/1 JSON receipt right from Quest Browser or Desktop!
+    document.getElementById('export-strata-btn').addEventListener('click', () => {
+      const receipt = buildStrataReceipt();
+      const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'yuddha-webxr-strata-receipt.json';
+      a.click();
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
