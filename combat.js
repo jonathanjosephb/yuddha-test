@@ -6,11 +6,12 @@
 // pool instead of an arcade health bar. No in-game stamina: your real arms tire.
 
 export const STRIKE = {
-  MIN_SPEED: 2.2,     // m/s — below this a contact is a touch, not a strike
-  FULL_SPEED: 8.0,    // m/s — full power
+  TOUCH_SPEED: 0.5,   // m/s — below this nothing registers; between this and MIN_SPEED it is a light touch
+  MIN_SPEED: 1.2,     // m/s — below this a contact is a touch, not a strike (Quest controllers punch ~4–7 m/s)
+  FULL_SPEED: 7.0,    // m/s — full power
   MAX_SPEED: 10.0,    // m/s — controller tracking is unreliable above ~10 m/s, so cap here
   MAX_DMG: 30,        // damage of a full-power, solid, neutral-zone strike
-  MIN_TRAVEL: 0.30,   // m of shoulder-relative travel; short enough for chain punches, blocks flailing
+  MIN_TRAVEL: 0.20,   // m of shoulder-relative travel; short enough for chain punches, blocks flailing
   GLANCE_ALIGN: 0.35, // strike-direction · surface-normal below this = glancing
   SOLID_ALIGN: 0.75,  // above this = solid
   GLANCE_MULT: 0.15,
@@ -24,10 +25,11 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 // 0 … ~1.15 power curve from fist speed.
 export function powerFromSpeed(speed) {
-  if (speed < STRIKE.MIN_SPEED) return 0;
+  if (speed < STRIKE.TOUCH_SPEED) return 0;
+  if (speed < STRIKE.MIN_SPEED) return 0.02 * (speed / STRIKE.MIN_SPEED); // glancing light touch: ~0.6 dmg
   const s = Math.min(speed, STRIKE.MAX_SPEED);
   const t = clamp((s - STRIKE.MIN_SPEED) / (STRIKE.FULL_SPEED - STRIKE.MIN_SPEED), 0, 1.3);
-  return Math.pow(t, 1.35) * 0.9 + 0.1 * Math.min(1, t * 4); // light snaps still register a little
+  return Math.max(0.02, Math.pow(t, 1.35) * 0.9 + 0.1 * Math.min(1, t * 4)); // light snaps still register a little; continuous with the touch range
 }
 
 // align = cos(angle) between strike direction and the into-surface direction.

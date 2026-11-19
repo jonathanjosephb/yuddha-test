@@ -109,7 +109,7 @@
       <div class="rules">
         <strong>Room-Scale Only (Zero Nausea):</strong> Walk physically inside the 3.7m × 3.7m ring (thumbsticks disabled in combat).<br />
         <strong>Mixed Reality:</strong> Your real room stays visible (Quest passthrough) — only the opponent, your hands and hit effects are drawn. Clear a 2m × 2m space.<br />
-        <strong>Real Strike Physics:</strong> Power comes from fist speed (nothing under <strong>2.2 m/s</strong>, full power at <strong>8 m/s</strong>). Land square for a SOLID hit — angled contact glances off. Jaw, temples, solar plexus and liver are weak points. Big head shots stun; built-up punishment drops your opponent.<br />
+        <strong>Real Strike Physics:</strong> Power comes from fist speed (light touches under <strong>1.2 m/s</strong> barely count, a normal punch of <strong>4–5 m/s</strong> lands solid, full power at <strong>7 m/s</strong>). Land square for a SOLID hit — angled contact glances off. Jaw, temples, solar plexus and liver are weak points. Big head shots stun; built-up punishment drops your opponent.<br />
         <strong>Full-Surface Parry:</strong> Forearms, elbows, shoulders, open palms and fists all block &amp; strike. Block angle <strong>&gt; 60° = 90% damage reduction</strong> + Touch Plus haptics.<br />
         <strong>Bare Hands:</strong> Squeeze <strong>Grip</strong> to close your fingers, <strong>Trigger</strong> curls your index finger, rest your thumb on the stick/buttons to fold it — release for an open palm. Controller-free hand tracking mirrors your real fingers.<br />
         <strong>In-VR Mode Switch:</strong> Press <strong>B / Y</strong> to cycle Heavy Bag → Focus Mitts → Slip Bag → 1v1 Duel.
@@ -139,7 +139,7 @@
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.170.0/build/three.module.js';
     import { createHumanHand, curlsFromGamepad, curlsFromHandJoints, HAND_WRIST_LOCAL } from './hands.js';
-    import { loadOpponent, loadFighterGLTF, createPlayerHands } from './opponent.js';
+    import { loadOpponent, loadFighterGLTF, createPlayerArms, GRIP_TILT, WRIST_IN_GRIP, FOREARM_IN_GRIP, ARM_L1, ARM_L2 } from './opponent.js';
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { XREstimatedLight } from 'three/addons/webxr/XREstimatedLight.js';
     import { STRIKE, computeStrike, powerFromSpeed, strikeQuality, headZone, bodyZone, createPunishment, stepPunishment, applyHit, condition, createImpactAudio } from './combat.js';
@@ -148,16 +148,19 @@
     const RING_HALF = 1.85;
     // Strike gates tuned for realism (see combat.js): velocity-gated, capped at the
     // ~10 m/s where Quest controller tracking stops being trustworthy.
-    const REQUIRED_TRAVEL = STRIKE.MIN_TRAVEL; // 0.30 m — allows short kung-fu chain punches
+    const REQUIRED_TRAVEL = STRIKE.MIN_TRAVEL; // 0.20 m — allows short kung-fu chain punches
     const HIT_COOLDOWN = 0.20;
-    const MIN_SPEED = STRIKE.MIN_SPEED;        // 2.2 m/s
+    const TOUCH_SPEED = STRIKE.TOUCH_SPEED;    // below MIN_SPEED but above this = a light touch (tiny damage)
+    const HAND_R = 0.09;                       // fist hit radius (forgiving: fist + knuckle reach)
+    const MIN_SPEED = STRIKE.MIN_SPEED;        // 1.2 m/s
     const MAX_SPEED = STRIKE.MAX_SPEED;        // 10 m/s
     const CLEAN_BLOCK_MULT = STRIKE.BLOCK_MULT; // 90% reduction
     const FOREARM_R = 0.048;
     const UPPER_ARM_R = 0.056;
     const SHOULDER_R = 0.088;
-    const HEAD_R = 0.115;
-    const TORSO_R = 0.145;
+    const HEAD_R = 0.125;
+    const TORSO_R = 0.16;
+    const SPAR_DIST = 0.66;                    // sparring partner's root → your head (his head ≈ 0.62 m away: inside arm's reach)
 
     const MODES = ['HEAVY BAG', 'FOCUS MITTS', 'SLIP BAG', '1V1 DUEL'];
     let activeMode = 0;
@@ -379,6 +382,7 @@
       ctx.fillStyle = '#ffd166';
       ctx.font = 'bold 32px sans-serif';
       ctx.fillText(callout.slice(0, 62), 512, 305);
+      if (xrTag) { ctx.fillStyle = '#7ee0a8'; ctx.font = '600 24px sans-serif'; ctx.fillText(xrTag, 512, 358); }
       boardTex.needsUpdate = true;
 
       document.getElementById('hud-mode').textContent = title;
@@ -460,6 +464,11 @@
       const nose = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), skinMat);
       nose.scale.set(0.8, 1.2, 1); nose.position.set(0, -0.025, -HEAD_R * 0.98);
       parts.head.add(band, hair, nose);
+      // Short jacket sleeves (open cylinders) cover the top of the skinned upper arms.
+      const sleeveGeo = new THREE.CylinderGeometry(UPPER_ARM_R * 1.2, UPPER_ARM_R * 1.55, 1, 20, 1, true);
+      const sleeveMat = trunkMat.clone(); sleeveMat.side = THREE.DoubleSide;
+      parts.lSleeve = new THREE.Mesh(sleeveGeo, sleeveMat); parts.rSleeve = new THREE.Mesh(sleeveGeo, sleeveMat);
+      parts.lSleeve.visible = parts.rSleeve.visible = false;
       const sash = new THREE.Mesh(new THREE.CylinderGeometry(TORSO_R * 1.04, TORSO_R * 1.04, 0.07, 18), accentMat);
       sash.position.y = -0.17;
       parts.torso.add(sash);
@@ -473,12 +482,13 @@
       group.add(
         parts.lHand, parts.rHand, parts.lForearm, parts.rForearm,
         parts.lUpper, parts.rUpper, parts.lShoulder, parts.rShoulder,
-        parts.head, parts.torso
+        parts.head, parts.torso, parts.lSleeve, parts.rSleeve
       );
       scene.add(group);
       return parts;
     }
 
+    const bodyState0 = createBodyState(), bodyState1 = createBodyState();
     const f0Vis = createFighterVisual(true, 0xa8231b, 0x2b2420);
     const f1Vis = createFighterVisual(false, 0x9e1b1b, 0x34343c);
 
@@ -524,23 +534,39 @@
     const _vA = new THREE.Vector3(), _vB = new THREE.Vector3(), _vC = new THREE.Vector3();
     const _upY = new THREE.Vector3(0, 1, 0);
 
+    // Fist velocity comes straight from the fist's world-position deltas (no low-pass filter):
+    // displacement over the last ~40 ms of frames, so it is unaffected by the controller's own
+    // velocity estimate and has no filter lag. The peak of the last 80 ms is what the hit gate sees,
+    // because a fist is already slowing down on the frame it lands.
+    const VEL_WINDOW = 0.04, PEAK_HOLD = 0.08;
     function createStrokeState() {
-      return { prevRel: new THREE.Vector3(), prevWorld: new THREE.Vector3(), vel: new THREE.Vector3(), travel: 0, cooldown: 0, peak: 0, init: false };
+      return { prevRel: new THREE.Vector3(), prevWorld: new THREE.Vector3(), vel: new THREE.Vector3(), cur: new THREE.Vector3(), hist: [], travel: 0, cooldown: 0, gcooldown: 0, guardT: 0, peak: 0, peakT: 0, init: false };
     }
     function stepStroke(st, worldPos, shoulderPos, dt) {
       st.cooldown = Math.max(0, st.cooldown - dt);
+      st.gcooldown = Math.max(0, st.gcooldown - dt);
+      st.guardT = Math.max(0, st.guardT - dt);
       const rel = worldPos.clone().sub(shoulderPos);
       if (!st.init) {
-        st.prevRel.copy(rel); st.prevWorld.copy(worldPos); st.vel.set(0, 0, 0); st.init = true; return;
+        st.prevRel.copy(rel); st.prevWorld.copy(worldPos); st.vel.set(0, 0, 0); st.cur.set(0, 0, 0); st.hist.length = 0; st.init = true; return;
       }
-      const rawVel = worldPos.clone().sub(st.prevWorld).divideScalar(Math.max(dt, 1e-4));
-      if (rawVel.length() > MAX_SPEED) rawVel.setLength(MAX_SPEED);
-      st.vel.lerp(rawVel, Math.min(1, Math.max(0.2, dt * 35)));
+      // Windowed velocity: oldest sample at least VEL_WINDOW old (or the previous frame if frames are slow).
+      for (const h of st.hist) h.t += dt;
+      st.hist.push({ p: worldPos.clone(), t: 0 });
+      while (st.hist.length > 2 && st.hist[1].t >= VEL_WINDOW) st.hist.shift();
+      const old = st.hist[0], span = Math.max(old.t, 1e-3);
+      const win = worldPos.clone().sub(old.p).divideScalar(span);
+      if (win.length() > MAX_SPEED) win.setLength(MAX_SPEED);
+      st.cur.copy(win);
+      // Hold the peak briefly so impact-frame deceleration doesn't hide a real punch.
+      if (win.length() >= st.vel.length() || st.peakT <= 0) { st.vel.copy(win); st.peakT = PEAK_HOLD; }
+      else { st.peakT -= dt; }
       const speed = st.vel.length();
       const stepDist = Math.max(rel.distanceTo(st.prevRel), worldPos.distanceTo(st.prevWorld));
+      const rawDir = worldPos.clone().sub(st.prevWorld);
 
       if (speed >= MIN_SPEED) {
-        if (st.peak > 2.0 && rawVel.lengthSq() > 1e-4 && rawVel.clone().normalize().dot(st.vel.clone().normalize()) < -0.25) {
+        if (st.peak > 1.5 * MIN_SPEED && rawDir.lengthSq() > 1e-8 && rawDir.normalize().dot(st.vel.clone().normalize()) < -0.25) {
           st.travel = stepDist; st.peak = speed;
         } else {
           st.travel = Math.min(2.5, st.travel + stepDist);
@@ -553,7 +579,20 @@
       st.prevRel.copy(rel); st.prevWorld.copy(worldPos);
     }
 
-    function solveArmRig(headPos, headQuat, lHandPos, lHandQuat, rHandPos, rHandQuat) {
+    // Body yaw (radians, fwd = (-sin, 0, -cos)): follows the head, but blended toward where the
+    // hands are, and smoothed, so turning your head alone doesn't swing your shoulders round.
+    const wrapPi = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+    function createBodyState() { return { yaw: null }; }
+    const _tmpWrist = new THREE.Vector3();
+    function gripWrist(side, gripPos, gripQuat, out) {
+      return out.copy(side < 0 ? WRIST_IN_GRIP.l : WRIST_IN_GRIP.r).applyQuaternion(GRIP_TILT).applyQuaternion(gripQuat).add(gripPos);
+    }
+    const _fa = new THREE.Vector3();
+
+    // Two-bone arm IK. Shoulders are estimated from the headset: ~0.24 m below and ~0.06 m behind
+    // the eyes, 0.185 m to each side. Grip poses are used raw (no smoothing, no lag): the wrist
+    // is derived from the controller's grip pose every frame and the elbow follows.
+    function solveArmRig(headPos, headQuat, lHandPos, lHandQuat, rHandPos, rHandQuat, body = null, dt = 1 / 72) {
       // Clamp STAGE head to ring bounds (Zero stick locomotion!)
       const offX = THREE.MathUtils.clamp(headPos.x, -RING_HALF, RING_HALF) - headPos.x;
       const offZ = THREE.MathUtils.clamp(headPos.z, -RING_HALF, RING_HALF) - headPos.z;
@@ -563,39 +602,65 @@
       const lHP = lHandPos.clone().add(off);
       const rHP = rHandPos.clone().add(off);
 
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
-      fwd.y = 0;
-      if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1); else fwd.normalize();
+      const hfwd = new THREE.Vector3(0, 0, -1).applyQuaternion(headQuat);
+      hfwd.y = 0;
+      if (hfwd.lengthSq() < 1e-4) hfwd.set(0, 0, -1); else hfwd.normalize();
+      const headYaw = Math.atan2(-hfwd.x, -hfwd.z);
+      let yaw = headYaw;
+      if (body) {
+        if (body.yaw === null) body.yaw = headYaw;
+        let d = wrapPi(headYaw - body.yaw);
+        // Pull the torso toward the direction the hands are reaching.
+        const mx = (lHP.x + rHP.x) * 0.5 - hP.x, mz = (lHP.z + rHP.z) * 0.5 - hP.z;
+        if (mx * mx + mz * mz > 0.09) d = d * 0.65 + wrapPi(Math.atan2(-mx, -mz) - body.yaw) * 0.35;
+        body.yaw = wrapPi(body.yaw + d * (1 - Math.exp(-dt * 7)));
+        // The torso can't lag more than ~55° behind the head.
+        const lag = wrapPi(headYaw - body.yaw);
+        if (Math.abs(lag) > 0.96) body.yaw = wrapPi(headYaw - Math.sign(lag) * 0.96);
+        yaw = body.yaw;
+      }
+      const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
       const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-      const chest = hP.clone().add(new THREE.Vector3(0, -0.22, 0)).addScaledVector(fwd, -0.04);
+      const bodyQuat = new THREE.Quaternion().setFromAxisAngle(_upY, yaw);
+      const chest = hP.clone().add(new THREE.Vector3(0, -0.24, 0)).addScaledVector(fwd, -0.06);
 
-      const lSh = chest.clone().addScaledVector(right, -0.19);
-      const rSh = chest.clone().addScaledVector(right, 0.19);
+      const lSh = chest.clone().addScaledVector(right, -0.185);
+      const rSh = chest.clone().addScaledVector(right, 0.185);
 
-      function solveElbow(sh, hand, handQ, sideSign) {
-        const L1 = 0.29, L2 = 0.27;
-        const toH = hand.clone().sub(sh);
-        const dist = toH.length();
+      function solveElbow(sh, wrist, gripQ, sideSign) {
+        const dist = wrist.distanceTo(sh);
+        const stretch = Math.min(1.18, Math.max(1, dist / (ARM_L1 + ARM_L2)));
+        const L1 = ARM_L1 * stretch, L2 = ARM_L2 * stretch;
         if (dist < 0.05) return sh.clone().add(new THREE.Vector3(sideSign * 0.08, -L1, 0));
-        const dir = toH.clone().divideScalar(dist);
-        const cDist = THREE.MathUtils.clamp(dist, 0.06, L1 + L2 - 0.005);
+        const dir = wrist.clone().sub(sh).divideScalar(dist);
+        const cDist = THREE.MathUtils.clamp(dist, Math.abs(L1 - L2) + 0.02, L1 + L2 - 0.003);
         const cosA = THREE.MathUtils.clamp((L1 * L1 + cDist * cDist - L2 * L2) / (2 * L1 * cDist), -1, 1);
         const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
-        const wristOut = new THREE.Vector3(sideSign, -0.65, 0).applyQuaternion(handQ);
-        const pole = new THREE.Vector3(0, -0.8, 0).addScaledVector(right, sideSign * 0.42).addScaledVector(wristOut, 0.35).normalize();
-        const bend = pole.sub(dir.clone().multiplyScalar(pole.dot(dir)));
-        if (bend.lengthSq() < 1e-5) bend.crossVectors(dir, right);
+        // Pole: where the controller's own forearm axis says the elbow should be, blended with a
+        // relaxed boxer's elbow (down and slightly out).
+        _fa.copy(FOREARM_IN_GRIP).applyQuaternion(GRIP_TILT).applyQuaternion(gripQ);
+        const guess = wrist.clone().addScaledVector(_fa, L2).sub(sh);
+        const hintPerp = guess.sub(dir.clone().multiplyScalar(guess.dot(dir)));
+        if (hintPerp.lengthSq() > 1e-8) hintPerp.normalize();
+        const relaxed = new THREE.Vector3(0, -0.9, 0).addScaledVector(right, sideSign * 0.3).addScaledVector(fwd, -0.15);
+        relaxed.sub(dir.clone().multiplyScalar(relaxed.dot(dir))).normalize();
+        const bend = hintPerp.multiplyScalar(0.5).addScaledVector(relaxed, 0.5);
+        bend.sub(dir.clone().multiplyScalar(bend.dot(dir)));
+        if (bend.lengthSq() < 1e-6) bend.crossVectors(dir, right);
         bend.normalize();
         return sh.clone().addScaledVector(dir, L1 * cosA).addScaledVector(bend, L1 * sinA);
       }
 
+      const lWr = gripWrist(-1, lHP, lHandQuat, new THREE.Vector3());
+      const rWr = gripWrist(+1, rHP, rHandQuat, new THREE.Vector3());
       return {
-        head: hP, headQuat: headQuat.clone(),
+        head: hP, headQuat: headQuat.clone(), bodyQuat, bodyYaw: yaw,
         lSh, rSh,
-        lEl: solveElbow(lSh, lHP, lHandQuat, -1),
-        rEl: solveElbow(rSh, rHP, rHandQuat, +1),
+        lEl: solveElbow(lSh, lWr, lHandQuat, -1),
+        rEl: solveElbow(rSh, rWr, rHandQuat, +1),
         lH: lHP, lHQ: lHandQuat.clone(),
         rH: rHP, rHQ: rHandQuat.clone(),
+        lWr, rWr,
         chest, pelvis: chest.clone().add(new THREE.Vector3(0, -0.36, 0)),
         ringOffset: off,
       };
@@ -610,38 +675,54 @@
       mesh.scale.set(1, Math.max(0.05, len / (1.0 + radius * 2)), 1);
     }
 
-    // Hand meshes live in WebXR grip-space. Desktop preview & the sparring bot feed a
-    // plain facing quaternion instead, so rotate it into grip-space: forearm back toward
-    // the body, thumbs up, palms facing in (a vertical-fist guard).
+    // Hand meshes live in WebXR grip-space. Desktop preview & the sparring bot feed a plain
+    // facing quaternion instead, so rotate it into grip-space: forearm back toward the body,
+    // thumbs up, palms facing in (a vertical-fist guard). Everything downstream sees grip poses.
     const GRIP_FROM_FACING = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
     const _wristL = new THREE.Vector3(-HAND_WRIST_LOCAL.x, HAND_WRIST_LOCAL.y, HAND_WRIST_LOCAL.z);
     const _wristR = HAND_WRIST_LOCAL.clone();
     const _lWrist = new THREE.Vector3(), _rWrist = new THREE.Vector3();
+    const _sleeveEnd = new THREE.Vector3();
 
-    function syncFighterVisual(vis, rig, dt, facingQuats = false) {
+    function syncFighterVisual(vis, rig, dt) {
       vis.lHand.position.copy(rig.lH); vis.lHand.quaternion.copy(rig.lHQ);
       vis.rHand.position.copy(rig.rH); vis.rHand.quaternion.copy(rig.rHQ);
-      if (facingQuats) {
-        vis.lHand.quaternion.multiply(GRIP_FROM_FACING);
-        vis.rHand.quaternion.multiply(GRIP_FROM_FACING);
-      }
       vis.lHandRig.update(dt);
       vis.rHandRig.update(dt);
-      // Forearm meets the hand at the wrist (visual only — colliders still use rig.lH / rig.rH).
-      _lWrist.copy(_wristL).applyQuaternion(vis.lHand.quaternion).add(rig.lH);
-      _rWrist.copy(_wristR).applyQuaternion(vis.rHand.quaternion).add(rig.rH);
-      placeLimbMesh(vis.lForearm, rig.lEl, _lWrist, FOREARM_R);
-      placeLimbMesh(vis.rForearm, rig.rEl, _rWrist, FOREARM_R);
-      placeLimbMesh(vis.lUpper, rig.lSh, rig.lEl, UPPER_ARM_R);
-      placeLimbMesh(vis.rUpper, rig.rSh, rig.rEl, UPPER_ARM_R);
-      vis.lShoulder.position.copy(rig.lSh);
-      vis.rShoulder.position.copy(rig.rSh);
       if (vis.real) {
-        vis.real.pose('left', vis.lHand.position, vis.lHand.quaternion, vis.lHandRig.curl);
-        vis.real.pose('right', vis.rHand.position, vis.rHand.quaternion, vis.rHandRig.curl);
+        // Skinned arms: shoulder → elbow → wrist, hand on the grip pose. Sleeves and the
+        // torso cover the shoulder end so the arms are visibly attached to the body.
+        vis.real.pose('left', rig.lSh, rig.lEl, vis.lHand.position, vis.lHand.quaternion, vis.lHandRig.curl);
+        vis.real.pose('right', rig.rSh, rig.rEl, vis.rHand.position, vis.rHand.quaternion, vis.rHandRig.curl);
+        placeSleeve(vis.lSleeve, rig.lSh, _sleeveEnd.lerpVectors(rig.lSh, rig.lEl, 0.55));
+        placeSleeve(vis.rSleeve, rig.rSh, _sleeveEnd.lerpVectors(rig.rSh, rig.rEl, 0.55));
+        vis.lShoulder.position.copy(rig.lSh); vis.rShoulder.position.copy(rig.rSh);
+        vis.torso.position.copy(rig.chest); vis.torso.position.y -= 0.16;
+        vis.torso.quaternion.copy(rig.bodyQuat);
+      } else {
+        // Forearm meets the hand at the wrist (visual only — colliders still use rig.lH / rig.rH).
+        _lWrist.copy(_wristL).applyQuaternion(vis.lHand.quaternion).add(rig.lH);
+        _rWrist.copy(_wristR).applyQuaternion(vis.rHand.quaternion).add(rig.rH);
+        placeLimbMesh(vis.lForearm, rig.lEl, _lWrist, FOREARM_R);
+        placeLimbMesh(vis.rForearm, rig.rEl, _rWrist, FOREARM_R);
+        placeLimbMesh(vis.lUpper, rig.lSh, rig.lEl, UPPER_ARM_R);
+        placeLimbMesh(vis.rUpper, rig.rSh, rig.rEl, UPPER_ARM_R);
+        vis.lShoulder.position.copy(rig.lSh);
+        vis.rShoulder.position.copy(rig.rSh);
+        vis.torso.position.addVectors(rig.chest, rig.pelvis).multiplyScalar(0.5);
       }
       vis.head.position.copy(rig.head); vis.head.quaternion.copy(rig.headQuat);
-      vis.torso.position.addVectors(rig.chest, rig.pelvis).multiplyScalar(0.5);
+    }
+    // Open-ended jacket sleeve (unit cylinder, +Y axis) from a to b.
+    function placeSleeve(mesh, a, b) {
+      const dir = _vA.subVectors(b, a); let len = dir.length();
+      if (len < 1e-4) return;
+      dir.divideScalar(len);
+      // Start a little inside the body so the deltoid end of the skin is always under the cloth.
+      const back = 0.06; len += back;
+      mesh.position.copy(a).addScaledVector(dir, -back).addScaledVector(dir, len * 0.5);
+      mesh.quaternion.setFromUnitVectors(_upY, dir);
+      mesh.scale.set(1, len, 1);
     }
 
     // Segment-to-segment closest distance for Capsule-Capsule / Sphere collision
@@ -677,7 +758,7 @@
       f1L: createStrokeState(), f1R: createStrokeState(),
     };
 
-    window.__yuddha = { state }; // read-only debug/test hook
+    window.__yuddha = { state, manual: false, f0: f0Vis }; // debug/test hook
 
     const mittPatterns = [
       { lPos: new THREE.Vector3(-0.18, 1.54, -0.52), lN: new THREE.Vector3(0.08, -0.05, 1).normalize(), rPos: new THREE.Vector3(0.18, 1.56, -0.58), rN: new THREE.Vector3(-0.08, -0.05, 1).normalize() },
@@ -752,11 +833,16 @@
       // The local player's hands and forearms come from the same scanned-quality character,
       // so both fighters share one skin. Procedural hands stay as data (curl) + fallback.
       try {
-        const real = createPlayerHands(gltf, { material: o.skinMaterial });
+        const real = createPlayerArms(gltf, { material: o.skinMaterial });
         f0Vis.group.add(real.group);
         f0Vis.real = real;
-        for (const k of ['lHand', 'rHand', 'lForearm', 'rForearm', 'lUpper', 'rUpper', 'lShoulder', 'rShoulder']) f0Vis[k].visible = false;
-        f0Vis.lHand.visible = f0Vis.rHand.visible = false;
+        // Skinned arms replace the procedural limbs; the jacket (shoulder caps, sleeves, torso)
+        // stays so the arms visibly attach to a body.
+        for (const k of ['lHand', 'rHand', 'lForearm', 'rForearm', 'lUpper', 'rUpper']) f0Vis[k].visible = false;
+        f0Vis.lShoulder.visible = f0Vis.rShoulder.visible = true;
+        f0Vis.lSleeve.visible = f0Vis.rSleeve.visible = true;
+        f0Vis.torso.visible = true; f0Vis.torso.scale.set(1.3, 0.78, 0.8);
+        for (const c of f0Vis.torso.children) c.visible = false; // no belt on your own jacket
         window.__yuddha.realHandsTris = real.tris;
       } catch (e) { console.warn('Realistic hands unavailable, keeping procedural hands:', e); }
       opp = o;
@@ -818,8 +904,8 @@
       head: new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 12, 8), hbMat),
       chest: new THREE.Mesh(new THREE.SphereGeometry(TORSO_R, 12, 8), hbMat),
       pelvis: new THREE.Mesh(new THREE.SphereGeometry(TORSO_R, 12, 8), hbMat),
-      lH: new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), hbMat),
-      rH: new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), hbMat),
+      lH: new THREE.Mesh(new THREE.SphereGeometry(HAND_R, 8, 6), hbMat),
+      rH: new THREE.Mesh(new THREE.SphereGeometry(HAND_R, 8, 6), hbMat),
     } : null;
     if (hb) for (const m of Object.values(hb)) scene.add(m);
 
@@ -895,7 +981,7 @@
     const _curlTmp = [0, 0, 0, 0, 0];
     const curlAll = (v) => [v, v, v, v, v];
 
-    renderer.setAnimationLoop((now, xrFrame) => {
+    function frame(now, xrFrame) {
       const dt = THREE.MathUtils.clamp((now - lastTs) / 1000, 1 / 144, 0.05);
       lastTs = now;
       tickCount++;
@@ -982,12 +1068,31 @@
         f0Vis.rHandRig.setTarget(curlAll(fistHeld || deskRPunch >= 0 ? 1 : relaxed));
       }
 
-      const rig0 = solveArmRig(hPos, hQuat, lPos, lQuat, rPos, rQuat);
-      if (renderer.xr.isPresenting) rigGroup.position.copy(rig0.ringOffset);
+      // Desktop preview feeds facing quaternions; convert to grip poses like a controller reports.
+      // Test hook: window.__yuddha.sim = { head:[x,y,z], headQuat:[x,y,z,w], l:{p:[..],q:[..]}, r:{..},
+      // curl, xrLike } injects raw grip-space poses exactly as a headset would report them.
+      const sim = window.__yuddha.sim;
+      let simXr = false;
+      if (!renderer.xr.isPresenting) {
+        if (sim) {
+          hPos.fromArray(sim.head); hQuat.fromArray(sim.headQuat || [0, 0, 0, 1]);
+          lPos.fromArray(sim.l.p); lQuat.fromArray(sim.l.q); rPos.fromArray(sim.r.p); rQuat.fromArray(sim.r.q);
+          const c = sim.curl ?? 1;
+          f0Vis.lHandRig.setTarget(curlAll(c)); f0Vis.rHandRig.setTarget(curlAll(c));
+          simXr = !!sim.xrLike;
+          if (!debugCam.length) { camera.position.copy(hPos); camera.quaternion.copy(hQuat); }
+        } else {
+          lQuat.copy(hQuat).multiply(GRIP_FROM_FACING);
+          rQuat.copy(hQuat).multiply(GRIP_FROM_FACING);
+        }
+      }
+      const rig0 = solveArmRig(hPos, hQuat, lPos, lQuat, rPos, rQuat, bodyState0, dt);
+      if (renderer.xr.isPresenting || simXr) rigGroup.position.copy(rig0.ringOffset);
+      if (simXr && !debugCam.length) { camera.position.copy(hPos); camera.quaternion.copy(hQuat); }
 
       stepStroke(state.f0L, rig0.lH, rig0.lSh, dt);
       stepStroke(state.f0R, rig0.rH, rig0.rSh, dt);
-      syncFighterVisual(f0Vis, rig0, dt, !renderer.xr.isPresenting);
+      syncFighterVisual(f0Vis, rig0, dt);
 
       // 20 Hz Network Sync (if relay connected)
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1027,8 +1132,8 @@
         bagBand.quaternion.copy(bagBody.quaternion);
 
         const limbs = [
-          { side: 'left', a: rig0.lH, b: rig0.lH, r: 0.075, st: state.f0L, name: 'HAND' },
-          { side: 'right', a: rig0.rH, b: rig0.rH, r: 0.075, st: state.f0R, name: 'HAND' },
+          { side: 'left', a: rig0.lH, b: rig0.lH, r: HAND_R, st: state.f0L, name: 'HAND' },
+          { side: 'right', a: rig0.rH, b: rig0.rH, r: HAND_R, st: state.f0R, name: 'HAND' },
           { side: 'left', a: rig0.lEl, b: rig0.lH, r: FOREARM_R, st: state.f0L, name: 'FOREARM' },
           { side: 'right', a: rig0.rEl, b: rig0.rH, r: FOREARM_R, st: state.f0R, name: 'FOREARM' },
         ];
@@ -1137,7 +1242,7 @@
         B.off.addScaledVector(B.vel, dt);
         B.off.clampLength(0, 0.28);
         B.pauseT = Math.max(0, B.pauseT - dt);
-        B.back = Math.max(0, B.back - 0.3 * dt);
+        B.back = Math.max(0, B.back - 0.5 * dt);
         const oppDown = p1.downT > 0, oppStunned = p1.stunT > 0;
 
         let f1Head, f1Q, f1LH, f1RH;
@@ -1150,7 +1255,7 @@
           f1Vis.lHandRig.setTarget(Array.isArray(remotePose.lf) ? remotePose.lf : curlAll(0.4));
           f1Vis.rHandRig.setTarget(Array.isArray(remotePose.rf) ? remotePose.rf : curlAll(0.4));
         } else {
-          const zBot = THREE.MathUtils.clamp(rig0.head.z - 1.05 - B.back, -1.65, 0.4);
+          const zBot = THREE.MathUtils.clamp(rig0.head.z - (SPAR_DIST - 0.04) - B.back, -1.65, 0.4);
           const xBot = THREE.MathUtils.clamp(rig0.head.x * 0.4 + Math.sin(elapsedSec * 1.1) * 0.18, -1.2, 1.2);
           f1Q = new THREE.Quaternion().setFromAxisAngle(_upY, Math.PI);
           if (oppDown) {
@@ -1189,9 +1294,16 @@
         if (useModel) {
           // Skeletal opponent: stands just inside striking range, faces you, throws real
           // animated jabs/crosses; hitboxes come from its bones.
-          const rootPos = new THREE.Vector3(rig0.head.x * 0.5 + Math.sin(elapsedSec * 0.9) * 0.12, 0, rig0.head.z - 0.92 - B.back);
-          rootPos.x = THREE.MathUtils.clamp(rootPos.x, -RING_HALF + 0.3, RING_HALF - 0.3);
-          rootPos.z = THREE.MathUtils.clamp(rootPos.z, -RING_HALF + 0.2, RING_HALF);
+          // He stands at punching distance (head ≈ 0.62 m from yours, well inside arm's reach) and
+          // walks in/out at a brisk pace to keep it when you step back or forward.
+          const standPos = new THREE.Vector3(rig0.head.x * 0.5 + Math.sin(elapsedSec * 0.9) * 0.12, 0, rig0.head.z - SPAR_DIST - B.back);
+          standPos.x = THREE.MathUtils.clamp(standPos.x, -RING_HALF + 0.3, RING_HALF - 0.3);
+          standPos.z = THREE.MathUtils.clamp(standPos.z, -RING_HALF + 0.2, RING_HALF);
+          if (!B.pos) B.pos = standPos.clone();
+          const stepV = standPos.clone().sub(B.pos), maxStep = (oppDown ? 0.4 : 2.6) * dt;
+          if (stepV.length() > maxStep) stepV.setLength(maxStep);
+          B.pos.add(stepV);
+          const rootPos = B.pos.clone();
           opp.placeFacing(rootPos, rig0.head);
           if (oppDown) {
             if (p1.downT < 1.1 && opp.mode === 'down') opp.getUp();
@@ -1209,9 +1321,11 @@
           keyLight.position.set(rootPos.x + 0.35, 3.5, rootPos.z + 0.55);
           keyLight.target.position.set(rootPos.x, 1.1, rootPos.z);
         } else {
-          rig1 = solveArmRig(f1Head, f1Q, f1LH, f1Q, f1RH, f1Q);
-          syncFighterVisual(f1Vis, rig1, dt, true);
+          const f1Grip = f1Q.clone().multiply(GRIP_FROM_FACING);
+          rig1 = solveArmRig(f1Head, f1Q, f1LH, f1Grip, f1RH, f1Grip, bodyState1, dt);
+          syncFighterVisual(f1Vis, rig1, dt);
         }
+        window.__yuddha.rig0 = rig0; window.__yuddha.rig1 = rig1;
         stepStroke(state.f1L, rig1.lH, rig1.lSh, dt);
         stepStroke(state.f1R, rig1.rH, rig1.rSh, dt);
 
@@ -1242,8 +1356,8 @@
           if (defP.downT > 0) return; // no hitting a downed fighter
           const defHeadVel = isPlayer0Attacking ? state.h1Vel : state.h0Vel;
           const strikers = [
-            { side: 'left', a: attRig.lH, b: attRig.lH, r: 0.075, st: stL, name: 'HAND' },
-            { side: 'right', a: attRig.rH, b: attRig.rH, r: 0.075, st: stR, name: 'HAND' },
+            { side: 'left', a: attRig.lH, b: attRig.lH, r: HAND_R, st: stL, name: 'HAND' },
+            { side: 'right', a: attRig.rH, b: attRig.rH, r: HAND_R, st: stR, name: 'HAND' },
             { side: 'left', a: attRig.lEl, b: attRig.lH, r: FOREARM_R, st: stL, name: 'FOREARM' },
             { side: 'right', a: attRig.rEl, b: attRig.rH, r: FOREARM_R, st: stR, name: 'FOREARM' },
           ];
@@ -1259,19 +1373,31 @@
           ];
           for (const s of strikers) {
             const speed = s.st.vel.length();
-            if (speed < MIN_SPEED || s.st.cooldown > 0) continue;
+            if (speed < TOUCH_SPEED) continue;
+            const isTouch = speed < MIN_SPEED; // light touch: tiny damage, no travel needed
+            // Collect contacts first: head/body win over a guard contact in the same frame, and the
+            // guard has its own cooldown so grazing a glove never swallows the punch behind it.
+            let chosen = null, chosenHit = null;
             for (const t of targets) {
-              const hit = segmentCapsuleOverlap(s.a, s.b, s.r, t.a, t.b, t.r);
-              if (!hit) continue;
-              if (s.st.travel < REQUIRED_TRAVEL) {
+              if ((t.guard ? s.st.gcooldown : s.st.cooldown) > 0) continue;
+              const h = segmentCapsuleOverlap(s.a, s.b, s.r, t.a, t.b, t.r);
+              if (!h) continue;
+              if (!chosen || (chosen.guard && !t.guard)) { chosen = t; chosenHit = h; }
+            }
+            if (!chosen) continue;
+            for (const t of [chosen]) {
+              const hit = chosenHit;
+              if (t.guard && !isTouch && s.st.travel < REQUIRED_TRAVEL) { s.st.gcooldown = 0.12; break; } // a short brush on a glove: ignore, don't punish the punch behind it
+              if (!isTouch && s.st.travel < REQUIRED_TRAVEL) {
                 s.st.cooldown = 0.12;
                 if (isPlayer0Attacking) { state.wiggles++; pulseController(s.side, 0.12, 15); sfx.play('whiff', 0.4); state.callout = `TOO SHORT (${s.st.travel.toFixed(2)}m) — COMMIT TO THE STRIKE`; }
                 break;
               }
               const punchDir = s.st.vel.clone().normalize();
               const align = punchDir.dot(hit.normal);
-              const blockNormal = hit.normal.clone().negate();
-              const angleDeg = Math.acos(THREE.MathUtils.clamp(blockNormal.dot(punchDir), -1, 1)) * (180 / Math.PI);
+              // A guard only parries cleanly (-90%) when the strike meets it at a steep angle (> 60°
+              // off its surface normal, i.e. deflected); a straight punch into a guard is absorbed (-55%).
+              const angleDeg = Math.acos(THREE.MathUtils.clamp(align, -1, 1)) * (180 / Math.PI);
               const cleanBlock = t.guard && angleDeg > 60;
               let zone = null;
               if (!t.guard) zone = t.head ? headZone(localOffset(defRig, hit.point, defRig.head)) : bodyZone(localOffset(defRig, hit.point, defRig.chest));
@@ -1280,9 +1406,12 @@
                 speed: s.name === 'HAND' ? speed : speed * 0.7, align, zone, moveInSpeed: moveIn,
                 stunned: defP.stunT > 0, guard: t.guard, cleanBlock,
               });
-              const finalDmg = res.dmg;
+              // Punching through a guard still lands, at reduced damage.
+              const finalDmg = res.dmg * ((!t.guard && s.st.guardT > 0) ? 0.55 : 1);
 
-              s.st.cooldown = HIT_COOLDOWN; s.st.travel = 0; s.st.peak = 0;
+              if (t.guard) { s.st.gcooldown = 0.3; s.st.guardT = 0.3; }
+              else if (isTouch) s.st.cooldown = 0.35;
+              else { s.st.cooldown = HIT_COOLDOWN; s.st.travel = 0; s.st.peak = 0; }
               const outcome = applyHit(defP, finalDmg, !!(zone && zone.head));
               if (outcome.knockdown) onKnockdown(isPlayer0Attacking);
               if (isPlayer0Attacking && opp && !remotePose) opp.react(!!(zone && zone.head), punchDir, t.guard ? finalDmg * 0.3 : finalDmg);
@@ -1294,7 +1423,7 @@
                 const recoil = (t.guard ? 0.25 : 1) * Math.min(1.9, 0.25 + finalDmg * 0.06);
                 state.bot.vel.addScaledVector(punchDir, (zone && zone.head) ? recoil : recoil * 0.5);
                 state.bot.pauseT = Math.max(state.bot.pauseT, t.guard ? 0.15 : 0.35 + finalDmg * 0.025);
-                state.bot.back = Math.min(0.5, state.bot.back + res.power * (t.guard ? 0.04 : 0.12));
+                state.bot.back = Math.min(0.2, state.bot.back + res.power * (t.guard ? 0.015 : 0.05));
               } else {
                 if (cleanBlock) state.blocks++;
                 hurtFeedback(finalDmg, t.guard, outcome.stunned);
@@ -1333,9 +1462,15 @@
         updateJumbotron(title, stats, state.callout, state.hp0, state.hp1, activeMode === 3);
       }
 
+      if (mrActive && renderer.xr.isPresenting) enforcePassthrough();
+      if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) bannerMesh.visible = false; }
       renderer.render(scene, camera);
       if ((++renderFrames & 7) === 0) window.__yuddha.renderInfo = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries };
-    });
+    }
+    renderer.setAnimationLoop((now, xrFrame) => { if (!window.__yuddha.manual) frame(now, xrFrame); });
+    // Test hook: window.__yuddha.manual = true stops the real-time loop; step(ms) then runs exactly
+    // one deterministic frame of that length (used by tests/browser/xr-sim-check.mjs).
+    window.__yuddha.step = (ms) => { frame(lastTs + ms, null); };
 
     // ── UI Wiring & WebXR Launch ──────────────────────────────────────────
     const enterBtn = document.getElementById('enter-vr-btn');
@@ -1343,48 +1478,96 @@
 
     // Mixed reality (Quest passthrough) is the default so you always see your real room;
     // full immersive VR is only used if AR isn't available (or chosen explicitly).
+    // The button stays disabled until the support check has finished, so a tap can never start
+    // a full-VR session just because immersive-ar hadn't been detected yet.
     const fullVrBtn = document.getElementById('enter-fullvr-btn');
     let arSupported = false, vrSupported = false;
-    if ('xr' in navigator) {
-      Promise.all([
+    enterBtn.disabled = true;
+    enterBtn.textContent = 'CHECKING HEADSET…';
+    const xrCheck = ('xr' in navigator)
+      ? Promise.all([
         navigator.xr.isSessionSupported('immersive-ar').catch(() => false),
         navigator.xr.isSessionSupported('immersive-vr').catch(() => false),
       ]).then(([ar, vr]) => {
         arSupported = ar; vrSupported = vr;
+        window.__yuddha.xrSupport = { ar, vr };
+        if (vr) fullVrBtn.style.display = '';
         if (ar) {
           enterBtn.textContent = 'ENTER MIXED REALITY (QUEST 3 / 3S)';
+          enterBtn.disabled = false;
           xrStatus.textContent = 'Mixed reality ready — your room stays visible. Click ENTER MIXED REALITY.';
           xrStatus.style.color = '#52f09c';
-          if (vr) fullVrBtn.style.display = '';
         } else if (vr) {
           enterBtn.textContent = 'ENTER VR (PASSTHROUGH UNAVAILABLE)';
-          xrStatus.textContent = 'This headset/browser has no passthrough AR — falling back to full VR.';
+          enterBtn.disabled = false;
+          xrStatus.textContent = 'This browser reports no passthrough AR (immersive-ar) — only full VR is available.';
           xrStatus.style.color = '#ffd166';
         } else {
+          enterBtn.textContent = 'NO HEADSET DETECTED';
           xrStatus.textContent = 'No XR headset detected in this browser — use Desktop Preview or open this URL in Meta Quest Browser.';
-          enterBtn.disabled = true;
         }
+      })
+      : Promise.resolve().then(() => {
+        enterBtn.textContent = 'WEBXR NEEDS HTTPS / QUEST BROWSER';
+        xrStatus.textContent = 'WebXR requires HTTPS (or Quest Browser). Desktop Preview works right here!';
       });
-    } else {
-      xrStatus.textContent = 'WebXR requires HTTPS (or Quest Browser). Desktop Preview works right here!';
-      enterBtn.disabled = true;
-    }
 
     document.querySelectorAll('.mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => setMode(Number(btn.dataset.mode)));
     });
 
+    // On-screen proof of what the headset actually gave us: the session's environmentBlendMode.
+    // MR is working when an immersive-ar session reports 'alpha-blend' (or 'additive' on glasses).
+    let mrActive = false, xrTag = '';
+    const bannerCanvas = document.createElement('canvas'); bannerCanvas.width = 768; bannerCanvas.height = 160;
+    const bannerTex = new THREE.CanvasTexture(bannerCanvas);
+    const bannerMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.0875), new THREE.MeshBasicMaterial({ map: bannerTex, transparent: true, depthTest: false, depthWrite: false }));
+    bannerMesh.position.set(0, -0.2, -0.75); bannerMesh.renderOrder = 1000; bannerMesh.frustumCulled = false; bannerMesh.visible = false;
+    camera.add(bannerMesh);
+    let bannerT = 0;
+    function showXrBanner(text, ok) {
+      const g = bannerCanvas.getContext('2d');
+      g.clearRect(0, 0, 768, 160);
+      g.fillStyle = ok ? 'rgba(12,60,36,0.88)' : 'rgba(90,24,16,0.9)';
+      g.fillRect(0, 0, 768, 160);
+      g.fillStyle = '#fff'; g.font = 'bold 40px sans-serif'; g.textAlign = 'center';
+      const [a, b] = text.split('\n');
+      g.fillText(a, 384, 70); g.font = '600 32px sans-serif'; g.fillStyle = ok ? '#9bf0c1' : '#ffb4a8'; g.fillText(b || '', 384, 120);
+      bannerTex.needsUpdate = true; bannerMesh.visible = true; bannerT = 7;
+    }
+    // Everything that could opaquely cover passthrough is forced off whenever MR is active.
+    function enforcePassthrough() {
+      if (scene.background) scene.background = null;
+      if (scene.fog) scene.fog = null;
+      if (envGroup.visible) envGroup.visible = false;
+      renderer.setClearColor(0x000000, 0);
+    }
+
     async function startXR(mode) {
+      if (mode === 'immersive-ar' || mode === 'auto') await xrCheck; // never race the support check
+      if (mode === 'auto') mode = arSupported ? 'immersive-ar' : 'immersive-vr';
       connectRelay(document.getElementById('room-input').value.trim());
       sfx.resume();
       try {
         const session = await navigator.xr.requestSession(mode, {
           optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', ...(mode === 'immersive-ar' ? ['light-estimation'] : [])],
         });
-        setPassthrough(mode === 'immersive-ar');
+        const blend = session.environmentBlendMode;
+        window.__yuddha.xrLog.push({ phase: 'session', mode, blend });
+        // Trust what the session says, not just what we asked for.
+        const pass = mode === 'immersive-ar' && blend !== 'opaque';
+        mrActive = pass;
+        setPassthrough(pass);
+        renderer.domElement.style.background = 'transparent';
+        xrTag = pass ? `MR on · blend=${blend}` : `VR (no passthrough) · blend=${blend}`;
+        window.__yuddha.xr = { mode, blend, passthrough: pass };
+        window.__yuddha.xrLog.push({ phase: 'passthrough', mode, blend, passthrough: pass });
+        xrStatus.textContent = `${mode} session · environmentBlendMode = ${blend} → ${pass ? 'passthrough ON' : 'passthrough OFF'}`;
+        xrStatus.style.color = pass ? '#52f09c' : '#ffd166';
         document.getElementById('overlay').classList.add('hidden');
         document.getElementById('hud').classList.add('hidden');
         session.addEventListener('end', () => {
+          mrActive = false; xrTag = '';
           setPassthrough(false);
           document.getElementById('overlay').classList.remove('hidden');
           if (autoSendReceipt && tickCount > 10) {
@@ -1392,14 +1575,30 @@
           }
         });
         await renderer.xr.setSession(session);
+        if (pass) enforcePassthrough();
+        showXrBanner(`${pass ? 'MIXED REALITY ON' : (mode === 'immersive-ar' ? 'PASSTHROUGH NOT ACTIVE' : 'FULL VR (ROOM HIDDEN)')}\nenvironmentBlendMode: ${blend}`, pass);
       } catch (err) {
+        mrActive = false;
         setPassthrough(false);
-        xrStatus.textContent = 'WebXR launch error: ' + err.message;
+        xrStatus.textContent = `WebXR launch error (${mode}): ${err.message}`;
         xrStatus.style.color = '#ff7b7b';
+        window.__yuddha.xr = { mode, error: String(err.message || err) };
+        window.__yuddha.xrLog.push({ phase: 'error', mode, error: String(err.message || err) });
       }
     }
-    enterBtn.addEventListener('click', () => startXR(arSupported ? 'immersive-ar' : 'immersive-vr'));
+    enterBtn.addEventListener('click', () => startXR('auto'));
     fullVrBtn.addEventListener('click', () => startXR('immersive-vr'));
+    window.__yuddha.startXR = startXR;
+    window.__yuddha.xrLog = [];
+    // Test probes: is anything opaque covering passthrough? (alpha of the framebuffer must be 0 where nothing is drawn)
+    window.__yuddha.mr = () => ({ active: mrActive, envVisible: envGroup.visible, arVisible: arGroup.visible, background: !!scene.background, fog: !!scene.fog, clearAlpha: renderer.getClearAlpha() });
+    window.__yuddha.probeAlpha = () => {
+      renderer.render(scene, camera);
+      const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, px = new Uint8Array(4);
+      const out = {};
+      for (const [k, x, y] of [['bl', 2, 2], ['br', w - 3, 2], ['tl', 2, h - 3], ['tr', w - 3, h - 3], ['topQ1', w >> 2, h - 3], ['topQ3', (3 * w) >> 2, h - 3]]) { gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); out[k] = px[3]; }
+      return out;
+    };
     // Desktop check of the mixed-reality look: ?passthroughPreview=1 hides the hall.
     if (new URLSearchParams(location.search).get('passthroughPreview') === '1') {
       setPassthrough(true);
@@ -1450,14 +1649,14 @@
         expected: [
           'STAGE ring bounds',
           'Symmetric limb colliders',
-          'Stroke travel anti-wiggle (>0.30m, >2.2m/s)',
+          'Stroke travel anti-wiggle (>0.20m, >1.2m/s)',
           'Clean block parry (>60deg -> 90% reduction)',
           'Stereo presentation frame',
         ],
         observations: [
           { layer: 'STAGE ring bounds', detail: `Room-scale local-floor clamped inside ±${RING_HALF}m ropes`, offsetMs: 0 },
           { layer: 'Symmetric limb colliders', detail: 'Active HandSphere (bare hand), ForearmCapsule, UpperArmCapsule, ShoulderSphere', offsetMs: 0 },
-          { layer: 'Stroke travel anti-wiggle (>0.30m, >2.2m/s)', detail: `Clean hits: ${state.hits}, Wiggles rejected: ${state.wiggles}, Score: ${state.score.toFixed(1)}`, offsetMs: Math.round(elapsedSec * 1000) },
+          { layer: 'Stroke travel anti-wiggle (>0.20m, >1.2m/s)', detail: `Clean hits: ${state.hits}, Wiggles rejected: ${state.wiggles}, Score: ${state.score.toFixed(1)}`, offsetMs: Math.round(elapsedSec * 1000) },
           { layer: 'Clean block parry (>60deg -> 90% reduction)', detail: `Clean parries: ${state.blocks}, Slips: ${state.slips}`, offsetMs: Math.round(elapsedSec * 1000) },
           { layer: 'Stereo presentation frame', detail: `Completed ${tickCount} frames (${elapsedSec.toFixed(2)}s)`, offsetMs: Math.round(elapsedSec * 1000) },
         ],

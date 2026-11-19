@@ -158,38 +158,62 @@ export async function loadOpponent(urlOrGltf, { skinTint = null } = {}) {
   return api;
 }
 
-// ── Player hands cut from the same realistic character ──────────────────
-// Only the forearm/hand/finger triangles of a skeleton clone are kept; the forearm
-// bone is re-parented to the scene and posed so the hand bone sits in the WebXR grip
-// pose, and finger bones curl from the same 0..1 values as the procedural hands.
+// ── Player arms cut from the same realistic character ───────────────────
+// Upper arm, forearm, hand and fingers of a skeleton clone are kept (shoulder cap, torso
+// and head are not drawn by the skin). The arm bones are detached from the body skeleton and
+// placed every frame from a two-bone IK solution: shoulder (estimated from the headset) →
+// elbow → wrist (from the controller grip pose). Each bone is a rigid segment, stretched
+// uniformly a little if the arm has to reach further than its length, so the hand never
+// separates from the arm. Finger bones curl from the same 0..1 values as the procedural hands.
 const FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
 // Flexion (radians) per joint at full curl.
 const CURL_MAX = { thumb: [0.55, 0.5, 0.65], index: [1.45, 1.65, 1.05], middle: [1.5, 1.7, 1.1], ring: [1.5, 1.7, 1.1], pinky: [1.5, 1.6, 1.05] };
+// Hand tilt around the grip's X axis: a hand never holds a Touch handle exactly square to the
+// forearm — the handle crosses the palm obliquely, so the forearm leans back toward the elbow.
+export const GRIP_TILT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(40));
+// Wrist (hand bone origin) in grip space, before the tilt. Forearm continues along +Y.
+export const WRIST_IN_GRIP = { l: new THREE.Vector3(-0.024, 0.095, 0.007), r: new THREE.Vector3(0.024, 0.095, 0.007) };
+export const FOREARM_IN_GRIP = new THREE.Vector3(0, 1, 0); // wrist → elbow, in grip space before the tilt
+export const ARM_L1 = 0.30, ARM_L2 = 0.29;               // upper arm / forearm length in the world (m)
+const HAND_SCALE = 1.12;
+const SKIN_BONE = /^(upperarm|lowerarm|hand|index|middle|ring|pinky|thumb)_.*?([lr])$/;
 
-export function createPlayerHands(gltf, { material = null } = {}) {
+const _F1 = new THREE.Matrix4();
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _h = new THREE.Vector3();
+// Orthonormal frame whose first axis is dir and whose second axis leans toward hint.
+function frame(out, dir, hint) {
+  _a.copy(dir).normalize();
+  _b.copy(hint).addScaledVector(_a, -hint.dot(_a));
+  if (_b.lengthSq() < 1e-6) { _b.set(0, 1, 0).addScaledVector(_a, -_a.y); if (_b.lengthSq() < 1e-6) _b.set(0, 0, 1); }
+  _b.normalize(); _c.crossVectors(_a, _b);
+  return out.makeBasis(_a, _b, _c);
+}
+
+export function createPlayerArms(gltf, { material = null } = {}) {
   const clone = SkeletonUtils.clone(gltf.scene);
   clone.updateMatrixWorld(true);
   let body = null;
   clone.traverse((o) => { if (o.isSkinnedMesh && /Superhero|Male/i.test(o.material.name)) body = o; });
-  if (!body) throw new Error('hand source mesh not found');
+  if (!body) throw new Error('arm source mesh not found');
   const skel = body.skeleton;
   const bi = new Map(skel.bones.map((b, i) => [b.name, i]));
   const bindWorld = skel.boneInverses.map((m) => m.clone().invert());
   const bindPos = (n) => new THREE.Vector3().setFromMatrixPosition(bindWorld[bi.get(n)]);
 
   const g = body.geometry, si = g.attributes.skinIndex, sw = g.attributes.skinWeight, idx = g.index.array;
-  const sideOfBone = skel.bones.map((b) => { const m = b.name.match(/^(lowerarm|hand|index|middle|ring|pinky|thumb)_.*?([lr])$/); return m ? m[2] : null; });
+  const sideOfBone = skel.bones.map((b) => { const m = b.name.match(SKIN_BONE); return m ? m[2] : null; });
   const dominant = (v) => { let best = 0, bw = -1; for (let k = 0; k < 4; k++) { const w = sw.getComponent(v, k); if (w > bw) { bw = w; best = si.getComponent(v, k); } } return best; };
   const vSide = new Array(si.count); for (let v = 0; v < si.count; v++) vSide[v] = sideOfBone[dominant(v)];
   const mat = material || body.material;
   const sides = {};
   let tris = 0;
+  const group = new THREE.Group();
   for (const s of ['l', 'r']) {
     const sub = [];
     for (let t = 0; t < idx.length; t += 3) if (vSide[idx[t]] === s && vSide[idx[t + 1]] === s && vSide[idx[t + 2]] === s) sub.push(idx[t], idx[t + 1], idx[t + 2]);
     const geo = new THREE.BufferGeometry();
     for (const [k, a] of Object.entries(g.attributes)) geo.setAttribute(k, a);
-    // Drop influences from bones we don't drive (upper arm etc.), or elbow-side verts stretch.
+    // Drop influences from bones we don't drive (spine, clavicle), or shoulder-side verts collapse.
     const w = new Float32Array(sw.count * 4);
     for (let v = 0; v < sw.count; v++) {
       let tot = 0;
@@ -202,25 +226,18 @@ export function createPlayerHands(gltf, { material = null } = {}) {
     const mesh = new THREE.SkinnedMesh(geo, mat);
     mesh.bind(skel, body.bindMatrix);
     mesh.frustumCulled = false;
-    // grip-from-bind rotation (see README): fingers→-Y, palm→±X, thumb→-Z
+    // Grip-from-bind rotation: open fingers → -Y, palm → ±X, thumb → -Z (grip space).
     const M = new THREE.Matrix4();
     if (s === 'l') M.makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, -1));
     else M.makeBasis(new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, -1));
-    const handName = `hand_${s}`, laName = `lowerarm_${s}`;
-    const iH = bi.get(handName), iLA = bi.get(laName);
-    const hand = skel.bones[iH], lowerarm = skel.bones[iLA];
-    // Work purely in bind space (the frames skinning uses): forearm is rigid w.r.t. the hand.
-    const hBindP = new THREE.Vector3(), hBindQ = new THREE.Quaternion(), hBindS = new THREE.Vector3();
-    bindWorld[iH].decompose(hBindP, hBindQ, hBindS);
-    const laFromHand = bindWorld[iH].clone().invert().multiply(bindWorld[iLA]);   // T_la = T_h · this
-    const handLocal = bindWorld[iLA].clone().invert().multiply(bindWorld[iH]);    // hand relative to forearm
-    // Re-parent the forearm bone to a free anchor so we can place it directly.
-    const anchor = new THREE.Group();
-    anchor.add(lowerarm);
-    handLocal.decompose(hand.position, hand.quaternion, hand.scale);
+    const bones = { up: skel.bones[bi.get(`upperarm_${s}`)], lo: skel.bones[bi.get(`lowerarm_${s}`)], hd: skel.bones[bi.get(`hand_${s}`)] };
+    const iUp = bi.get(`upperarm_${s}`), iLo = bi.get(`lowerarm_${s}`), iHd = bi.get(`hand_${s}`);
+    const Pu = bindPos(`upperarm_${s}`), Pe = bindPos(`lowerarm_${s}`), Pw = bindPos(`hand_${s}`);
+    // Detach the three arm bones from the body skeleton; we set their world matrices directly.
+    for (const b of Object.values(bones)) { group.add(b); b.matrixAutoUpdate = false; }
     // Finger joints: rest local quaternion + local flexion axis (bind T-pose: palms down, thumbs +Z).
     const palm = new THREE.Vector3(0, -1, 0);
-    const thumbTarget = new THREE.Vector3(0, 0.15, -1).normalize(); // thumb folds toward the palm & pinky side
+    const thumbTarget = new THREE.Vector3(0, 0.15, -1).normalize();
     const joints = FINGERS.map((f) => [1, 2, 3].map((j) => {
       const n = `${f}_0${j}_${s}`, child = j < 3 ? `${f}_0${j + 1}_${s}` : `${f}_04_leaf_${s}`;
       const bone = skel.bones[bi.get(n)];
@@ -230,22 +247,78 @@ export function createPlayerHands(gltf, { material = null } = {}) {
       const axisL = axisW.applyQuaternion(bq.invert());
       return { bone, rest: bone.quaternion.clone(), axis: axisL, max: CURL_MAX[f][j - 1] };
     }));
-    sides[s] = { mesh, anchor, M, Qb: hBindQ, Sb: hBindS, laFromHand, lowerarm, joints, wrist: new THREE.Vector3(s === 'l' ? -0.024 : 0.024, 0.095, 0.007) };
+    // Hand bone: its local TRS stays as the rest pose relative to the (now detached) lowerarm
+    // frame; we place it by world matrix instead, so nothing else to do for the hand itself.
+    const d0u = Pe.clone().sub(Pu), d0l = Pw.clone().sub(Pe);
+    const L1b = d0u.length(), L2b = d0l.length();
+    d0u.normalize(); d0l.normalize();
+    const hint0 = new THREE.Vector3(0, 0, 1);
+    sides[s] = {
+      mesh, M, bones, iUp, iLo, iHd, Pu, Pe, Pw, d0u, d0l, L1b, L2b, joints,
+      F0u: frame(new THREE.Matrix4(), d0u, hint0), F0l: frame(new THREE.Matrix4(), d0l, hint0),
+      wrist: (s === 'l' ? WRIST_IN_GRIP.l : WRIST_IN_GRIP.r).clone(),
+      upDir: new THREE.Vector3(), elbow: new THREE.Vector3(), wristW: new THREE.Vector3(),
+    };
+    group.add(mesh);
   }
-  const group = new THREE.Group();
-  for (const s of Object.values(sides)) group.add(s.mesh, s.anchor);
-  const _m = new THREE.Matrix4(), _qa = new THREE.Quaternion(), _p = new THREE.Vector3(), _qq = new THREE.Quaternion();
+
+  const _qa = new THREE.Quaternion(), _qq = new THREE.Quaternion(), _p = new THREE.Vector3(), _hint = new THREE.Vector3(), _hint2 = new THREE.Vector3();
+  const _dir = new THREE.Vector3(), _Dh = new THREE.Matrix4(), _Dr = new THREE.Matrix4();
+  const _X = new THREE.Matrix4(), _T = new THREE.Matrix4(), _S = new THREE.Matrix4(), _W = new THREE.Matrix4();
+  // X(p) = Pa + D·s·(p − Pb); bone world = X · bindWorld[bone]
+  function setBone(bone, Pa, D, s, Pb, bind) {
+    _X.copy(D); _X.scale(_p.set(s, s, s)); _X.setPosition(0, 0, 0);
+    _T.makeTranslation(-Pb.x, -Pb.y, -Pb.z);
+    _W.makeTranslation(Pa.x, Pa.y, Pa.z).multiply(_X).multiply(_T).multiply(bind);
+    bone.matrix.copy(_W);
+  }
+  // Rotation (Matrix4) from frame F0 to frame F1 (both orthonormal).
+  const _rot = new THREE.Matrix4();
+  const rotBetween = (out, F0, F1) => out.copy(F1).multiply(_rot.copy(F0).transpose());
+
   return {
     group, tris,
-    // side: 'left'|'right'; grip pose in world; curls [thumb,index,middle,ring,pinky] 0..1
-    pose(side, gripPos, gripQuat, curls) {
+    // Where the wrist sits for a given grip pose (used by the IK so the hand always meets the arm).
+    wristFor(side, gripPos, gripQuat, out = new THREE.Vector3()) {
+      return out.copy(sides[side === 'left' ? 'l' : 'r'].wrist).applyQuaternion(GRIP_TILT).applyQuaternion(gripQuat).add(gripPos);
+    },
+    // Test/debug: world positions of the three arm bones (must coincide with shoulder / elbow / wrist).
+    bonePositions(side) {
       const S = sides[side === 'left' ? 'l' : 'r'];
-      _qa.setFromRotationMatrix(S.M).premultiply(gripQuat).multiply(S.Qb); // hand bone world rotation
-      _p.copy(S.wrist).applyQuaternion(gripQuat).add(gripPos);            // wrist position
-      _m.compose(_p, _qa, S.Sb).multiply(S.laFromHand);                     // forearm world (anchor is identity)
-      _m.decompose(S.lowerarm.position, S.lowerarm.quaternion, S.lowerarm.scale);
+      return { up: new THREE.Vector3().setFromMatrixPosition(S.bones.up.matrixWorld), lo: new THREE.Vector3().setFromMatrixPosition(S.bones.lo.matrixWorld), hd: new THREE.Vector3().setFromMatrixPosition(S.bones.hd.matrixWorld) };
+    },
+    // side: 'left'|'right'. shoulder / elbow / gripPos / gripQuat in world; curls [thumb..pinky] 0..1.
+    pose(side, shoulder, elbow, gripPos, gripQuat, curls) {
+      const S = sides[side === 'left' ? 'l' : 'r'];
+      // Hand: grip rotation · tilt · bind→grip basis.
+      _qa.copy(gripQuat).multiply(GRIP_TILT);
+      _Dh.makeRotationFromQuaternion(_qa).multiply(S.M);                 // bind-world vector → actual world vector
+      S.wristW.copy(S.wrist).applyQuaternion(GRIP_TILT).applyQuaternion(gripQuat).add(gripPos);
+      const wrist = S.wristW;
+      // Upper arm: aim shoulder→elbow, twist so its bind "front" faces the way the forearm folds.
+      _dir.subVectors(elbow, shoulder);
+      const l1 = Math.max(1e-3, _dir.length()); _dir.divideScalar(l1);
+      _h.subVectors(wrist, elbow); _hint.copy(_h).addScaledVector(_dir, -_h.dot(_dir));
+      if (_hint.lengthSq() < 1e-5) _hint.set(0, 0, 1).applyQuaternion(_qq.setFromRotationMatrix(_Dh));
+      frame(_F1, _dir, _hint);
+      rotBetween(_Dr, S.F0u, _F1);
+      setBone(S.bones.up, shoulder, _Dr, l1 / S.L1b, S.Pu, bindWorld[S.iUp]);
+      // Forearm: aim elbow→wrist; twist between the hand's thumb direction and the upper arm's twist.
+      _dir.subVectors(wrist, elbow);
+      const l2 = Math.max(1e-3, _dir.length()); _dir.divideScalar(l2);
+      _hint2.set(0, 0, 1).applyMatrix4(_Dh); // thumb direction in the world (_Dh is a pure rotation)
+      _hint2.addScaledVector(_dir, -_hint2.dot(_dir));
+      _hint.copy(_hint).addScaledVector(_dir, -_hint.dot(_dir));
+      if (_hint2.lengthSq() > 1e-6) _hint2.normalize();
+      if (_hint.lengthSq() > 1e-6) _hint.normalize();
+      _hint2.multiplyScalar(0.7).addScaledVector(_hint, 0.3);
+      frame(_F1, _dir, _hint2);
+      rotBetween(_Dr, S.F0l, _F1);
+      setBone(S.bones.lo, elbow, _Dr, l2 / S.L2b, S.Pe, bindWorld[S.iLo]);
+      // Hand + fingers.
+      setBone(S.bones.hd, wrist, _Dh, HAND_SCALE, S.Pw, bindWorld[S.iHd]);
       for (let f = 0; f < 5; f++) for (const jt of S.joints[f]) jt.bone.quaternion.copy(jt.rest).multiply(_qq.setFromAxisAngle(jt.axis, (curls[f] || 0) * jt.max));
-      S.anchor.updateMatrixWorld(true);
+      S.bones.up.updateMatrixWorld(true); S.bones.lo.updateMatrixWorld(true); S.bones.hd.updateMatrixWorld(true);
     },
   };
 }
