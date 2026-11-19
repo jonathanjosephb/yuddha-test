@@ -130,9 +130,18 @@
     <button id="menu-back-btn">Menu</button>
   </div>
 
+  <script type="importmap">
+    { "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    } }
+  </script>
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.170.0/build/three.module.js';
     import { createHumanHand, curlsFromGamepad, curlsFromHandJoints, HAND_WRIST_LOCAL } from './hands.js';
+    import { loadOpponent, loadFighterGLTF, createPlayerHands } from './opponent.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { XREstimatedLight } from 'three/addons/webxr/XREstimatedLight.js';
     import { STRIKE, computeStrike, powerFromSpeed, strikeQuality, headZone, bodyZone, createPunishment, stepPunishment, applyHit, condition, createImpactAudio } from './combat.js';
 
     // ── Constants matching C# YuddhaCombatPhysics 1:1 ─────────────────────
@@ -172,18 +181,41 @@
     rigGroup.add(camera);
     scene.add(rigGroup);
 
-    // ── Lighting: one warm overhead key with dark falloff (gritty), dim fill, cool rim ──
+    // ── Lighting: image-based fill + one hard warm overhead key with soft shadows ──
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
-    const hemi = new THREE.HemisphereLight(0xffe2c0, 0x1a120c, 0.75);
+    renderer.toneMappingExposure = 1.0;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.xr.setFoveation(1.0); // fixed foveated rendering on Quest
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = roomEnv;
+    scene.environmentIntensity = 0.35; // low fill keeps the overhead key dramatic
+    const hemi = new THREE.HemisphereLight(0xffe2c0, 0x1a120c, 0.25);
     scene.add(hemi);
-    const keyLight = new THREE.SpotLight(0xffd6a0, 2.8, 0, 0.8, 0.6, 0);
-    keyLight.position.set(0.3, 4.2, 0.2);
-    keyLight.target.position.set(0, 1.0, -0.4);
+    const keyLight = new THREE.SpotLight(0xffd2a0, 30, 7, 0.55, 0.55, 1.4);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.bias = -0.0004;
+    keyLight.shadow.normalBias = 0.02;
+    keyLight.shadow.camera.near = 0.5; keyLight.shadow.camera.far = 6;
+    keyLight.position.set(0.3, 3.6, -0.3);
+    keyLight.target.position.set(0, 1.0, -0.5);
     scene.add(keyLight, keyLight.target);
-    const rimLight = new THREE.DirectionalLight(0x9fb8ff, 0.55);
-    rimLight.position.set(-2.2, 3.0, -2.5);
+    const rimLight = new THREE.DirectionalLight(0x9fb8ff, 0.6);
+    rimLight.position.set(-2.2, 3.0, -3.5);
     scene.add(rimLight);
+
+    // In mixed reality, WebXR light estimation (if the headset offers it) replaces the
+    // fixed fill with your real room's light.
+    const xrLight = new XREstimatedLight(renderer);
+    xrLight.addEventListener('estimationstart', () => {
+      scene.add(xrLight); hemi.visible = false;
+      if (xrLight.environment) scene.environment = xrLight.environment;
+    });
+    xrLight.addEventListener('estimationend', () => {
+      scene.remove(xrLight); hemi.visible = true; scene.environment = roomEnv;
+    });
 
     // Procedural canvas textures (no external assets).
     function canvasTex(w, h, draw, repeatX = 1, repeatY = 1) {
@@ -216,18 +248,29 @@
     // ── Training hall (full-VR fallback only; hidden in mixed reality) ────
     const envGroup = new THREE.Group();
     scene.add(envGroup);
-    const matFloor = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.82, color: 0xb8a490 });
-    const matPlatform = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.7, color: 0x8a4a32 });
+    // CC0 PBR textures from Poly Haven (see README credits), 1k/512 WebP.
+    const texLoader = new THREE.TextureLoader();
+    function pbr(name, repeat, colorHex) {
+      const load = (suffix, srgb) => {
+        const t = texLoader.load(`./assets/textures/${name}_${suffix}.webp`);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat); t.anisotropy = 4;
+        if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+      };
+      return new THREE.MeshStandardMaterial({ map: load('diff', true), normalMap: load('nor_gl'), roughnessMap: load('rough'), color: colorHex ?? 0xffffff });
+    }
+    const matFloor = pbr('wood_floor_worn', 4);
+    const matPlatform = pbr('wood_floor_worn', 2, 0xb0805a);
     const matLacquer = new THREE.MeshStandardMaterial({ color: 0x7a1712, roughness: 0.45 });
     const matDarkWood = new THREE.MeshStandardMaterial({ color: 0x2a1a12, roughness: 0.85 });
     const matWhite = new THREE.MeshStandardMaterial({ color: 0xe2e6ee, roughness: 0.5 });
 
     const hallFloor = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), matFloor);
-    hallFloor.rotation.x = -Math.PI / 2; hallFloor.position.y = -0.002;
+    hallFloor.rotation.x = -Math.PI / 2; hallFloor.position.y = -0.002; hallFloor.receiveShadow = true;
     envGroup.add(hallFloor);
     // Low sparring platform the size of the play space.
     const platform = new THREE.Mesh(new THREE.BoxGeometry(RING_HALF * 2 + 0.3, 0.04, RING_HALF * 2 + 0.3), matPlatform);
-    platform.position.y = -0.02;
+    platform.position.y = -0.02; platform.receiveShadow = true;
     envGroup.add(platform);
     // Lacquered pillars at the corners mark the boundary (no ropes for open-hand fighting).
     for (const [px, pz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
@@ -239,7 +282,7 @@
       envGroup.add(baseStone);
     }
     // Back and side walls: dark timber, with a wooden training dummy and hanging lanterns.
-    const wallMat = new THREE.MeshStandardMaterial({ map: woodTex, color: 0x4a3426, roughness: 0.9 });
+    const wallMat = pbr('concrete_wall_008', 2, 0x8a7a6a);
     for (const [x, z, ry] of [[0, -4.2, 0], [-4.2, 0, Math.PI / 2], [4.2, 0, -Math.PI / 2], [0, 4.2, Math.PI]]) {
       const wall = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 4.2), wallMat);
       wall.position.set(x, 2.1, z); wall.rotation.y = ry;
@@ -278,6 +321,11 @@
       disc.rotation.x = -Math.PI / 2; disc.position.y = 0.004;
       arGroup.add(disc);
     }
+    // Shadow catcher: invisible floor that only shows the opponent's shadow, so the
+    // fighter is grounded in your real room.
+    const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.ShadowMaterial({ opacity: 0.5 }));
+    shadowCatcher.rotation.x = -Math.PI / 2; shadowCatcher.position.y = 0.002; shadowCatcher.receiveShadow = true;
+    arGroup.add(shadowCatcher);
     const _savedBg = scene.background, _savedFog = scene.fog;
     function setPassthrough(on) {
       envGroup.visible = !on;
@@ -285,7 +333,8 @@
       scene.background = on ? null : _savedBg;
       scene.fog = on ? null : _savedFog;
       renderer.setClearColor(0x000000, on ? 0 : 1);
-      hemi.intensity = on ? 0.95 : 0.75; // real-room ambient is brighter than the dark hall
+      hemi.intensity = on ? 0.45 : 0.25; // real-room ambient is brighter than the dark hall
+      scene.environmentIntensity = on ? 0.6 : 0.35;
     }
 
     // Diegetic 3D Ringside Jumbotron (readable inside VR!)
@@ -337,14 +386,44 @@
       document.getElementById('hud-callout').textContent = callout;
     }
 
+    // Realistic skin: physically based with a warm sheen (subsurface-like scattering at
+    // grazing angles), light sweat clearcoat and a procedural pore/wrinkle normal map.
+    const skinNormalTex = (() => {
+      const N = 256, c = document.createElement('canvas'); c.width = c.height = N;
+      const g = c.getContext('2d'), img = g.createImageData(N, N);
+      const h = new Float32Array(N * N);
+      for (let i = 0; i < N * N; i++) h[i] = Math.random();
+      for (let pass = 0; pass < 2; pass++) for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const i = y * N + x; h[i] = (h[i] * 2 + h[y * N + ((x + 1) % N)] + h[((y + 1) % N) * N + x]) / 4;
+      }
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        const i = y * N + x;
+        const crease = Math.sin((y / N) * Math.PI * 22 + Math.sin(x * 0.05) * 1.5) * 0.25; // fine skin lines
+        const dx = (h[y * N + ((x + 1) % N)] - h[i]) * 3.2;
+        const dy = (h[((y + 1) % N) * N + x] - h[i]) * 3.2 + crease * 0.15;
+        img.data[i * 4] = 128 + dx * 127; img.data[i * 4 + 1] = 128 + dy * 127; img.data[i * 4 + 2] = 255; img.data[i * 4 + 3] = 255;
+      }
+      g.putImageData(img, 0, 0);
+      const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 6);
+      return t;
+    })();
+    function makeSkinMaterial(colorHex) {
+      return new THREE.MeshPhysicalMaterial({
+        color: colorHex, roughness: 0.62, metalness: 0,
+        normalMap: skinNormalTex, normalScale: new THREE.Vector2(0.35, 0.35),
+        sheen: 0.6, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xd8604a),
+        clearcoat: 0.12, clearcoatRoughness: 0.5,
+      });
+    }
+
     // ── Fighter Visual Mesh Rig (Bare Human Hands, Forearm, UpperArm, Shoulder) ──
     // Hands are articulated (five fingers, knuckle joints) and open/close from
     // controller grip/trigger or hand-tracking joints — see hands.js.
     function createFighterVisual(isLocal, accentColorHex, trunkColorHex) {
       const group = new THREE.Group();
       const accentMat = new THREE.MeshStandardMaterial({ color: accentColorHex, roughness: 0.45 });
-      const skinMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xd4a17e : 0xb98468, roughness: 0.72 });
-      const nailMat = new THREE.MeshStandardMaterial({ color: isLocal ? 0xeec2b0 : 0xdcae9a, roughness: 0.35 });
+      const skinMat = makeSkinMaterial(isLocal ? 0xc8916c : 0xb98468);
+      const nailMat = new THREE.MeshPhysicalMaterial({ color: isLocal ? 0xe9bfae : 0xdcae9a, roughness: 0.25, clearcoat: 0.6, clearcoatRoughness: 0.2 });
       const trunkMat = new THREE.MeshStandardMaterial({ color: trunkColorHex, roughness: 0.75 });
 
       const makeLimb = (r) => new THREE.Mesh(new THREE.CapsuleGeometry(r, 1.0, 6, 14), skinMat);
@@ -557,6 +636,10 @@
       placeLimbMesh(vis.rUpper, rig.rSh, rig.rEl, UPPER_ARM_R);
       vis.lShoulder.position.copy(rig.lSh);
       vis.rShoulder.position.copy(rig.rSh);
+      if (vis.real) {
+        vis.real.pose('left', vis.lHand.position, vis.lHand.quaternion, vis.lHandRig.curl);
+        vis.real.pose('right', vis.rHand.position, vis.rHand.quaternion, vis.rHandRig.curl);
+      }
       vis.head.position.copy(rig.head); vis.head.quaternion.copy(rig.headQuat);
       vis.torso.position.addVectors(rig.chest, rig.pelvis).multiplyScalar(0.5);
     }
@@ -660,8 +743,89 @@
       tintMat.color.copy(_tintCol);
       tintMesh.visible = tintMat.opacity > 0.01;
     }
+    // ── Realistic opponent (skinned glTF). Falls back to the primitive rig until loaded
+    // and for online peers (whose skeleton we don't receive).
+    let opp = null;
+    let renderFrames = 0;
+    loadFighterGLTF('./assets/fighter.glb').then(async (gltf) => {
+      const o = await loadOpponent(gltf);
+      // The local player's hands and forearms come from the same scanned-quality character,
+      // so both fighters share one skin. Procedural hands stay as data (curl) + fallback.
+      try {
+        const real = createPlayerHands(gltf, { material: o.skinMaterial });
+        f0Vis.group.add(real.group);
+        f0Vis.real = real;
+        for (const k of ['lHand', 'rHand', 'lForearm', 'rForearm', 'lUpper', 'rUpper', 'lShoulder', 'rShoulder']) f0Vis[k].visible = false;
+        f0Vis.lHand.visible = f0Vis.rHand.visible = false;
+        window.__yuddha.realHandsTris = real.tris;
+      } catch (e) { console.warn('Realistic hands unavailable, keeping procedural hands:', e); }
+      opp = o;
+      scene.add(o.root);
+      o.root.visible = activeMode === 3;
+      f1Vis.group.visible = false;
+      window.__yuddha.opp = { tris: o.tris, get mode() { return o.mode; } };
+    }).catch((err) => { console.warn('Opponent model failed to load, using fallback rig:', err); });
+
+    // Sweat spray: one Points draw call, pooled droplets, gravity, fade.
+    const SWEAT_N = 160;
+    const sweatGeo = new THREE.BufferGeometry();
+    const sweatPos = new Float32Array(SWEAT_N * 3), sweatVel = new Float32Array(SWEAT_N * 3), sweatLife = new Float32Array(SWEAT_N);
+    sweatGeo.setAttribute('position', new THREE.BufferAttribute(sweatPos, 3));
+    const dropTex = (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 32; const g = c.getContext('2d');
+      const gr = g.createRadialGradient(13, 13, 1, 16, 16, 15);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(225,235,245,0.75)'); gr.addColorStop(1, 'rgba(200,215,230,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, 32, 32);
+      return new THREE.CanvasTexture(c);
+    })();
+    const sweatMat = new THREE.PointsMaterial({ size: 0.012, map: dropTex, transparent: true, depthWrite: false, opacity: 0.85, sizeAttenuation: true });
+    const sweat = new THREE.Points(sweatGeo, sweatMat);
+    sweat.frustumCulled = false;
+    scene.add(sweat);
+    let sweatNext = 0;
+    function spraySweat(point, dir, power) {
+      const n = Math.round(8 + 22 * Math.min(1, power));
+      for (let k = 0; k < n; k++) {
+        const i = sweatNext; sweatNext = (sweatNext + 1) % SWEAT_N;
+        sweatPos[i * 3] = point.x; sweatPos[i * 3 + 1] = point.y; sweatPos[i * 3 + 2] = point.z;
+        const sp = 0.6 + Math.random() * 1.8 * (0.5 + power);
+        sweatVel[i * 3] = dir.x * sp + (Math.random() - 0.5) * 1.4;
+        sweatVel[i * 3 + 1] = dir.y * sp + Math.random() * 1.0;
+        sweatVel[i * 3 + 2] = dir.z * sp + (Math.random() - 0.5) * 1.4;
+        sweatLife[i] = 0.45 + Math.random() * 0.35;
+      }
+    }
+    function updateSweat(dt) {
+      let alive = 0;
+      for (let i = 0; i < SWEAT_N; i++) {
+        if (sweatLife[i] <= 0) { sweatPos[i * 3 + 1] = -99; continue; }
+        alive++;
+        sweatLife[i] -= dt;
+        sweatVel[i * 3 + 1] -= 9.8 * dt;
+        sweatPos[i * 3] += sweatVel[i * 3] * dt; sweatPos[i * 3 + 1] += sweatVel[i * 3 + 1] * dt; sweatPos[i * 3 + 2] += sweatVel[i * 3 + 2] * dt;
+      }
+      sweat.visible = alive > 0;
+      if (alive) sweatGeo.attributes.position.needsUpdate = true;
+    }
+
+    // Debug: ?hitboxes=1 shows the opponent's collision volumes.
+    const showHitboxes = new URLSearchParams(location.search).get('hitboxes') === '1';
+    // Debug: ?debugCam=x,y,z[,lookX,lookY,lookZ] puts the desktop camera somewhere else (screenshots).
+    const debugCam = (new URLSearchParams(location.search).get('debugCam') || '').split(',').filter(Boolean).map(Number);
+    if (!debugCam.length) debugCam.length = 0;
+    const hbMat = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true });
+    const hb = showHitboxes ? {
+      head: new THREE.Mesh(new THREE.SphereGeometry(HEAD_R, 12, 8), hbMat),
+      chest: new THREE.Mesh(new THREE.SphereGeometry(TORSO_R, 12, 8), hbMat),
+      pelvis: new THREE.Mesh(new THREE.SphereGeometry(TORSO_R, 12, 8), hbMat),
+      lH: new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), hbMat),
+      rH: new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), hbMat),
+    } : null;
+    if (hb) for (const m of Object.values(hb)) scene.add(m);
+
     function onKnockdown(isOpponent) {
       sfx.play('down', 1);
+      if (isOpponent && opp && !remotePose) opp.knockDown();
       if (isOpponent) { state.kds++; state.callout = `KNOCKDOWN! (${state.p1.knockdowns}) — LET THEM RISE`; pulseController('left', 0.8, 120); pulseController('right', 0.8, 120); }
       else { state.callout = 'YOU WENT DOWN — BREATHE, GUARD UP'; }
     }
@@ -671,7 +835,8 @@
       bagGroup.visible = (m === 0);
       mittsGroup.visible = (m === 1);
       slipGroup.visible = (m === 2);
-      f1Vis.group.visible = (m === 3);
+      f1Vis.group.visible = (m === 3) && !opp;
+      if (opp) opp.root.visible = (m === 3);
       state.hp0 = 100; state.hp1 = 100;
       state.callout = [
         'HEAVY BAG: SPEED + SQUARE CONTACT = POWER',
@@ -807,6 +972,7 @@
         }
         camera.position.copy(hPos);
         camera.quaternion.copy(hQuat);
+        if (debugCam.length) { camera.position.set(debugCam[0], debugCam[1], debugCam[2]); camera.lookAt(debugCam[3] ?? 0, debugCam[4] ?? 1.2, debugCam[5] ?? -0.4); }
 
         // Desktop hands: relaxed by default, open palms on guard (Space), fists while
         // punching or holding R.
@@ -1016,10 +1182,38 @@
             f1Vis.rHandRig.setTarget(curlAll(rPunching ? 1 : 0.12));
           }
         }
-        const rig1 = solveArmRig(f1Head, f1Q, f1LH, f1Q, f1RH, f1Q);
+        const useModel = !!opp && !remotePose;
+        f1Vis.group.visible = !useModel;
+        if (opp) opp.root.visible = useModel;
+        let rig1;
+        if (useModel) {
+          // Skeletal opponent: stands just inside striking range, faces you, throws real
+          // animated jabs/crosses; hitboxes come from its bones.
+          const rootPos = new THREE.Vector3(rig0.head.x * 0.5 + Math.sin(elapsedSec * 0.9) * 0.12, 0, rig0.head.z - 0.92 - B.back);
+          rootPos.x = THREE.MathUtils.clamp(rootPos.x, -RING_HALF + 0.3, RING_HALF - 0.3);
+          rootPos.z = THREE.MathUtils.clamp(rootPos.z, -RING_HALF + 0.2, RING_HALF);
+          opp.placeFacing(rootPos, rig0.head);
+          if (oppDown) {
+            if (p1.downT < 1.1 && opp.mode === 'down') opp.getUp();
+          } else if (B.pauseT <= 0 && !oppStunned && opp.mode === 'guard') {
+            B.clock += dt;
+            const cyc = B.clock % 2.6, prev = (B.clock - dt) % 2.6;
+            if (prev > cyc) opp.strike('jab');                 // wrapped past 0
+            else if (prev < 1.3 && cyc >= 1.3) opp.strike('cross');
+          }
+          opp.update(dt, { stunned: oppStunned, t: elapsedSec });
+          rig1 = opp.rig();
+          botStriking = opp.striking;
+          if (hb) { hb.head.position.copy(rig1.head); hb.chest.position.copy(rig1.chest); hb.pelvis.position.copy(rig1.pelvis); hb.lH.position.copy(rig1.lH); hb.rH.position.copy(rig1.rH); }
+          // Overhead key light follows the fighter for that ring-spotlight look.
+          keyLight.position.set(rootPos.x + 0.35, 3.5, rootPos.z + 0.55);
+          keyLight.target.position.set(rootPos.x, 1.1, rootPos.z);
+        } else {
+          rig1 = solveArmRig(f1Head, f1Q, f1LH, f1Q, f1RH, f1Q);
+          syncFighterVisual(f1Vis, rig1, dt, true);
+        }
         stepStroke(state.f1L, rig1.lH, rig1.lSh, dt);
         stepStroke(state.f1R, rig1.rH, rig1.rSh, dt);
-        syncFighterVisual(f1Vis, rig1, dt, true);
 
         // Head velocities (for the move-in bonus: walking your head into a strike hurts more).
         if (state.h0Prev) state.h0Vel.subVectors(rig0.head, state.h0Prev).divideScalar(dt);
@@ -1090,6 +1284,9 @@
 
               s.st.cooldown = HIT_COOLDOWN; s.st.travel = 0; s.st.peak = 0;
               const outcome = applyHit(defP, finalDmg, !!(zone && zone.head));
+              if (outcome.knockdown) onKnockdown(isPlayer0Attacking);
+              if (isPlayer0Attacking && opp && !remotePose) opp.react(!!(zone && zone.head), punchDir, t.guard ? finalDmg * 0.3 : finalDmg);
+              if (!t.guard && res.quality === 'SOLID') spraySweat(hit.point, punchDir, res.power);
               if (isPlayer0Attacking) {
                 state.score += finalDmg;
                 if (!t.guard) state.hits++;
@@ -1126,6 +1323,7 @@
         flashMesh.scale.setScalar(flashSize * (0.6 + flashAge * 4));
       }
       updateTint(dt);
+      updateSweat(dt);
 
       if (tickCount % 6 === 0) {
         const title = activeMode === 3 ? `YUDDHA ARENA — 1V1 (${netStatus})` : `YUDDHA ARENA — ${MODES[activeMode]}`;
@@ -1136,6 +1334,7 @@
       }
 
       renderer.render(scene, camera);
+      if ((++renderFrames & 7) === 0) window.__yuddha.renderInfo = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries };
     });
 
     // ── UI Wiring & WebXR Launch ──────────────────────────────────────────
@@ -1180,7 +1379,7 @@
       sfx.resume();
       try {
         const session = await navigator.xr.requestSession(mode, {
-          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+          optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', ...(mode === 'immersive-ar' ? ['light-estimation'] : [])],
         });
         setPassthrough(mode === 'immersive-ar');
         document.getElementById('overlay').classList.add('hidden');
